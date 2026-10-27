@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d0d0f">
+  <meta name="description" content="Pixel Mosaic Tool - 画像の任意箇所に本格的なピクセル平均色モザイクを適用できる単一完結型PWAアプリ">
+  <title>Pixel Mosaic Tool - ピクセルモザイク編集ツール</title>
+
+  <!-- PWA Web App Manifest -->
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <!-- Google Fonts: Noto Sans JP / BIZ UDPGothic (オフライン時はシステムフォントへフォールバック) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- アプリケーションスタイルシート -->
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <!-- アプリケーション全体の2カラムレイアウト -->
+  <div class="app-layout">
+
+    <!-- ==================== 左ツールパネル (幅 300〜320px) ==================== -->
+    <aside class="tool-panel" aria-label="モザイク編集ツールパネル">
+
+      <!-- アプリヘッダー -->
+      <header class="panel-header">
+        <div class="brand-row">
+          <img src="./icons/icon-192.png" alt="Pixel Mosaic Tool アイコン" class="brand-icon" width="32" height="32">
+          <div class="brand-text">
+            <h1 class="app-title">Pixel Mosaic Tool</h1>
+            <span class="app-subtitle">本格ピクセルモザイク PWA</span>
+          </div>
+        </div>
+        <!-- PWAインストール可能時に表示されるボタン -->
+        <button type="button" id="installPwaBtn" class="btn btn-install" hidden aria-label="PWAアプリとしてインストール">
+          PWAインストール
+        </button>
+      </header>
+
+      <!-- パネル内アラート通知領域 (エラーや重要メッセージを画面内に表示) -->
+      <div id="panelAlertBox" class="panel-alert" role="alert" aria-live="assertive" hidden>
+        <div class="panel-alert-content">
+          <span id="panelAlertIcon" class="panel-alert-icon" aria-hidden="true">!</span>
+          <p id="panelAlertMessage" class="panel-alert-message"></p>
+        </div>
+        <button type="button" id="panelAlertCloseBtn" class="panel-alert-close" aria-label="アラート通知を閉じる">×</button>
+      </div>
+
+      <!-- スクロール可能なパネル本体 -->
+      <div class="panel-body">
+
+        <!-- 1. 画像ファイル読み込み & 画像情報・推奨モザイクサイズ常時表示 -->
+        <section class="panel-section" aria-labelledby="sectionFileHeading">
+          <h2 id="sectionFileHeading" class="section-title">1. 画像ファイル・推奨値</h2>
+
+          <!-- 非表示のファイル選択input (PNG / JPG / WebP 対応) -->
+          <input
+            type="file"
+            id="fileInput"
+            accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+            hidden
+          >
+
+          <div class="btn-row">
+            <button type="button" id="openFileBtn" class="btn btn-primary btn-full" aria-label="画像ファイルを開く (ショートカット Ctrl+O)">
+              <span class="btn-icon" aria-hidden="true">📂</span>
+              <span>画像を開く</span>
+              <kbd class="kbd-hint">Ctrl+O</kbd>
+            </button>
+            <button type="button" id="loadSampleBtn" class="btn btn-secondary" title="動作確認用のサンプル画像を生成して読み込みます" aria-label="サンプル画像を読み込む">
+              サンプル
+            </button>
+          </div>
+
+          <!-- 画像情報と推奨モザイクサイズの常時表示カード -->
+          <div class="info-card" aria-live="polite">
+            <div class="info-row">
+              <span class="info-label">ファイル名:</span>
+              <span id="infoFileName" class="info-value text-ellipsis" title="未選択">未選択</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">解像度 / 形式:</span>
+              <span id="infoResolution" class="info-value">- × - px</span>
+            </div>
+            <div class="info-row highlight-row">
+              <span class="info-label">画像の長辺:</span>
+              <strong id="infoLongSide" class="info-value accent-cyan">- px</strong>
+            </div>
+            <div class="info-row highlight-row">
+              <span class="info-label" title="長辺400px以上なら ceil(長辺/100)、最小4px">推奨モザイクサイズ:</span>
+              <strong id="infoRecommendedSize" class="info-value accent-purple">4 px <small>(最小4px)</small></strong>
+            </div>
+            <p class="formula-note">算出式: <code>max(4, ceil(長辺 / 100))</code></p>
+
+            <!-- 推奨値適用ボタン -->
+            <button
+              type="button"
+              id="applyRecommendedBtn"
+              class="btn btn-accent btn-full"
+              aria-label="推奨モザイクサイズを現在の設定に適用する"
+            >
+              ✨ 推奨値をモザイクサイズに適用 (<span id="recommendedBtnValue">4</span>px)
+            </button>
+          </div>
+        </section>
+
+        <!-- 2. ツール切替 (ブラシ / 矩形選択 / パン移動) -->
+        <section class="panel-section" aria-labelledby="sectionToolHeading">
+          <h2 id="sectionToolHeading" class="section-title">2. 適用ツール切替</h2>
+
+          <div class="tool-switcher" role="group" aria-label="モザイク適用ツール選択">
+            <button
+              type="button"
+              id="toolBrushBtn"
+              class="tool-btn active"
+              data-tool="brush"
+              aria-pressed="true"
+              aria-label="ブラシツールに切り替え (ショートカット B)"
+            >
+              <span class="tool-icon" aria-hidden="true">🖌️</span>
+              <span class="tool-name">ブラシ</span>
+              <kbd class="kbd-hint">B</kbd>
+            </button>
+
+            <button
+              type="button"
+              id="toolRectBtn"
+              class="tool-btn"
+              data-tool="rect"
+              aria-pressed="false"
+              aria-label="矩形選択ツールに切り替え (ショートカット R)"
+            >
+              <span class="tool-icon" aria-hidden="true">⬚</span>
+              <span class="tool-name">矩形選択</span>
+              <kbd class="kbd-hint">R</kbd>
+            </button>
+
+            <button
+              type="button"
+              id="toolPanBtn"
+              class="tool-btn"
+              data-tool="pan"
+              aria-pressed="false"
+              aria-label="手のひらパン移動ツールに切り替え (Spaceキー押下でも可)"
+            >
+              <span class="tool-icon" aria-hidden="true">✋</span>
+              <span class="tool-name">移動</span>
+              <kbd class="kbd-hint">Space</kbd>
+            </button>
+          </div>
+
+          <!-- 矩形選択ツール用の確定・キャンセル操作ボックス -->
+          <div id="rectActionBox" class="rect-action-box" aria-live="polite">
+            <div class="rect-status-header">
+              <span class="rect-status-dot" id="rectStatusDot"></span>
+              <span id="rectSelectionInfo" class="rect-status-text">ドラッグで矩形範囲を選択してください</span>
+            </div>
+            <p class="rect-hint-text">
+              選択中はモザイクサイズ変更でリアルタイムプレビューされます。枠内の移動・四隅リサイズも可能です。
+            </p>
+            <div class="btn-row">
+              <button
+                type="button"
+                id="confirmRectBtn"
+                class="btn btn-confirm btn-flex"
+                disabled
+                aria-label="選択した矩形領域にモザイクを確定適用する (Enter または ダブルクリック)"
+              >
+                ✓ 確定適用 <kbd class="kbd-hint">Enter</kbd>
+              </button>
+              <button
+                type="button"
+                id="cancelRectBtn"
+                class="btn btn-secondary"
+                disabled
+                aria-label="矩形選択をキャンセルする (Esc)"
+              >
+                解除 <kbd class="kbd-hint">Esc</kbd>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. モザイクサイズ & ブラシサイズ設定 -->
+        <section class="panel-section" aria-labelledby="sectionSizeHeading">
+          <h2 id="sectionSizeHeading" class="section-title">3. サイズ調整</h2>
+
+          <!-- モザイクサイズ (1〜200px, 1px単位, スライダー+数値連動) -->
+          <div class="control-group">
+            <div class="control-header">
+              <label for="mosaicSizeSlider" class="control-label">モザイクサイズ (1〜200px)</label>
+              <div class="number-input-wrap">
+                <label for="mosaicSizeInput" class="sr-only">モザイクサイズ数値入力</label>
+                <input
+                  type="number"
+                  id="mosaicSizeInput"
+                  class="number-input"
+                  min="1"
+                  max="200"
+                  step="1"
+                  value="16"
+                  aria-label="モザイクサイズ数値入力 (1から200ピクセル)"
+                >
+                <span class="unit-label">px</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              id="mosaicSizeSlider"
+              class="range-slider"
+              min="1"
+              max="200"
+              step="1"
+              value="16"
+              aria-label="モザイクサイズスライダー (1から200ピクセル)"
+            >
+            <div class="range-ticks">
+              <span>1px (極小)</span>
+              <span>50px</span>
+              <span>100px</span>
+              <span>200px (極大)</span>
+            </div>
+          </div>
+
+          <!-- ブラシサイズ (円形プレビュー直径, スライダー+数値連動) -->
+          <div id="brushControlGroup" class="control-group">
+            <div class="control-header">
+              <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>
+              <div class="number-input-wrap">
+                <label for="brushSizeInput" class="sr-only">ブラシサイズ数値入力</label>
+                <input
+                  type="number"
+                  id="brushSizeInput"
+                  class="number-input"
+                  min="4"
+                  max="400"
+                  step="1"
+                  value="64"
+                  aria-label="ブラシサイズ数値入力 (4から400ピクセル)"
+                >
+                <span class="unit-label">px</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              id="brushSizeSlider"
+              class="range-slider range-slider-cyan"
+              min="4"
+              max="400"
+              step="1"
+              value="64"
+              aria-label="ブラシサイズスライダー (4から400ピクセル)"
+            >
+            <div class="range-ticks">
+              <span>4px (細)</span>
+              <span>100px</span>
+              <span>200px</span>
+              <span>400px (太)</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. 履歴 (Undo/Redo) ・ 比較表示 ・ 保存 -->
+        <section class="panel-section" aria-labelledby="sectionActionHeading">
+          <h2 id="sectionActionHeading" class="section-title">4. 履歴・比較・保存</h2>
+
+          <!-- Undo / Redo ボタン -->
+          <div class="btn-row">
+            <button
+              type="button"
+              id="undoBtn"
+              class="btn btn-secondary btn-flex"
+              disabled
+              aria-label="元に戻す (Undo ショートカット Ctrl+Z)"
+            >
+              ↩ 元に戻す <kbd class="kbd-hint">Ctrl+Z</kbd>
+            </button>
+            <button
+              type="button"
+              id="redoBtn"
+              class="btn btn-secondary btn-flex"
+              disabled
+              aria-label="やり直す (Redo ショートカット Ctrl+Y または Ctrl+Shift+Z)"
+            >
+              ↪ やり直す <kbd class="kbd-hint">Ctrl+Y</kbd>
+            </button>
+          </div>
+          <div class="history-meta">
+            <span id="historyStatusText">履歴: 0 / 0 段階 (最大35段階保持)</span>
+          </div>
+
+          <!-- 原画比較 (Before / After: 押している間 & トグル切替対応) -->
+          <div class="compare-group">
+            <button
+              type="button"
+              id="compareHoldBtn"
+              class="btn btn-secondary btn-flex"
+              disabled
+              aria-label="押している間だけモザイク適用前の原画を表示する (ショートカット Hキー長押し)"
+            >
+              👁️ 押下中は原画 <kbd class="kbd-hint">H</kbd>
+            </button>
+            <button
+              type="button"
+              id="compareToggleBtn"
+              class="btn btn-secondary"
+              disabled
+              aria-pressed="false"
+              aria-label="原画表示 (Before/After) をトグル切り替えする"
+            >
+              原画固定: OFF
+            </button>
+          </div>
+
+          <!-- 保存ボタン -->
+          <button
+            type="button"
+            id="saveBtn"
+            class="btn btn-save btn-full"
+            disabled
+            aria-label="モザイク適用済み画像を保存する (ショートカット Ctrl+S)"
+          >
+            <span>💾 画像を保存 (<code>_mosaic</code>)</span>
+            <kbd class="kbd-hint">Ctrl+S</kbd>
+          </button>
+        </section>
+
+        <!-- 5. 画面を常に表示 (Wake Lock API) & 別ウィンドウ起動 -->
+        <section class="panel-section" aria-labelledby="sectionWindowHeading">
+          <h2 id="sectionWindowHeading" class="section-title">5. 表示維持・ウィンドウ</h2>
+
+          <!-- Wake Lock API トグル -->
+          <div class="toggle-row">
+            <div class="toggle-label-group">
+              <label for="wakeLockToggle" class="toggle-label">画面を常に表示 (Wake Lock)</label>
+              <span id="wakeLockStatus" class="wake-status">OFF</span>
+            </div>
+            <input
+              type="checkbox"
+              id="wakeLockToggle"
+              class="toggle-checkbox"
+              aria-label="画面を常に表示してスリープを防止する (Screen Wake Lock API)"
+            >
+          </div>
+
+          <!-- 別ウィンドウで開くボタン -->
+          <button
+            type="button"
+            id="openWindowBtn"
+            class="btn btn-secondary btn-full"
+            aria-label="このアプリを独立した別ウィンドウで開く"
+          >
+            🗗 別ウィンドウで開く
+          </button>
+
+          <!-- 常に前面表示に関する正直な仕様注釈 -->
+          <p class="honest-note">
+            ※WebブラウザおよびPWAのセキュリティ仕様上、OSレベルの「常に最前面表示（Always on Top）」は実現できません。代わりに、作業中の画面自動スリープを防ぐ <strong>Wake Lock API</strong> と、作業用に配置しやすい<strong>別ウィンドウ起動ボタン</strong>を提供しています。
+          </p>
+        </section>
+
+        <!-- 6. 警告表示 (常時表示) -->
+        <section class="warning-card" aria-label="モザイク処理に関する重要警告">
+          <h3 class="warning-title">⚠️ 重要: 保存前に必ずご確認ください</h3>
+          <ul class="warning-list">
+            <li><strong>モザイクは不可逆です:</strong> ピクセル領域を平均色で完全に塗りつぶすため、保存後の画像から元のピクセル情報を復元することはできません。</li>
+            <li><strong>保存前の目視確認:</strong> モザイクサイズが小さすぎると文字や顔立ちが推測される恐れがあります。保存前にズームして十分な強度か必ず確認してください。</li>
+            <li><strong>元画像の保護:</strong> 保存時は <code>元ファイル名_mosaic.拡張子</code> として出力され、元の画像ファイル自体は上書きされません。</li>
+          </ul>
+        </section>
+
+      </div>
+    </aside>
+
+    <!-- ==================== 右キャンバス作業領域 ==================== -->
+    <main class="workspace-area" aria-label="画像編集ワークスペース">
+
+      <!-- 上部ステータス＆ズームツールバー -->
+      <header class="canvas-toolbar" aria-label="キャンバス表示ステータスとズーム操作">
+        <div class="status-left">
+          <span id="statusToolBadge" class="status-badge badge-purple">🖌️ ブラシモード (B)</span>
+          <span id="statusCoords" class="status-coords">X: - , Y: -</span>
+          <span id="compareActiveBadge" class="status-badge badge-cyan" hidden>👁️ 原画 (Before) 表示中</span>
+        </div>
+
+        <div class="zoom-controls" role="group" aria-label="ズーム倍率操作">
+          <button type="button" id="zoomOutBtn" class="btn-icon-only" aria-label="ズームアウト (縮小 -)">−</button>
+          <span id="zoomLevelText" class="zoom-level-text" title="現在の表示倍率 (0.1x〜8.0x)">100%</span>
+          <button type="button" id="zoomInBtn" class="btn-icon-only" aria-label="ズームイン (拡大 +)">＋</button>
+          <button type="button" id="zoomResetBtn" class="btn-zoom-chip" aria-label="ズームを100%等倍にリセット (0)">100%</button>
+          <button type="button" id="zoomFitBtn" class="btn-zoom-chip" aria-label="画像を画面サイズにフィット表示">フィット</button>
+        </div>
+      </header>
+
+      <!-- キャンバスビューポート (チェッカーボード背景) -->
+      <div id="canvasViewport" class="canvas-viewport" tabindex="0" aria-label="モザイク編集キャンバス領域">
+
+        <!-- 表示用メインキャンバス (オフスクリーンキャンバスから高速転写) -->
+        <canvas id="displayCanvas" class="display-canvas" aria-label="編集中の画像キャンバス"></canvas>
+
+        <!-- 矩形選択中にキャンバス上部に表示されるフローティング確定バー -->
+        <div id="floatingRectBar" class="floating-rect-bar" hidden>
+          <span id="floatingRectText" class="floating-rect-text">矩形選択プレビュー中</span>
+          <button type="button" id="floatingConfirmBtn" class="btn btn-confirm btn-sm" aria-label="選択範囲のモザイクを確定する">
+            ✓ 確定 (Enter / ダブルクリック)
+          </button>
+          <button type="button" id="floatingCancelBtn" class="btn btn-secondary btn-sm" aria-label="選択範囲をキャンセルする">
+            ✕ キャンセル (Esc)
+          </button>
+        </div>
+
+        <!-- 初期状態（画像未読み込み時）の案内ボックス -->
+        <div id="emptyStateBox" class="empty-state-box">
+          <div class="empty-state-inner">
+            <div class="empty-icon" aria-hidden="true">🖼️</div>
+            <h2 class="empty-title">画像をドラッグ＆ドロップ、または選択</h2>
+            <p class="empty-desc">
+              PNG / JPG / WebP 形式に対応しています。<br>
+              すべての画像処理はお使いのブラウザ内（ローカル）で完結し、外部サーバーへ送信されることはありません。
+            </p>
+            <div class="empty-actions">
+              <button type="button" id="emptyOpenBtn" class="btn btn-primary" aria-label="パソコンや端末から画像ファイルを選択して開く">
+                📂 画像ファイルを選択 (Ctrl+O)
+              </button>
+              <button type="button" id="emptySampleBtn" class="btn btn-secondary" aria-label="デモ用のサンプル画像を生成して試す">
+                🎨 サンプル画像で今すぐ試す
+              </button>
+            </div>
+            <div class="shortcut-grid" aria-label="キーボードショートカット一覧">
+              <div class="sc-item"><kbd>B</kbd> <span>ブラシ</span></div>
+              <div class="sc-item"><kbd>R</kbd> <span>矩形選択</span></div>
+              <div class="sc-item"><kbd>Enter</kbd> <span>矩形確定</span></div>
+              <div class="sc-item"><kbd>Ctrl+Z</kbd> <span>元に戻す</span></div>
+              <div class="sc-item"><kbd>Ctrl+Y</kbd> <span>やり直す</span></div>
+              <div class="sc-item"><kbd>H</kbd> <span>原画比較</span></div>
+              <div class="sc-item"><kbd>Space</kbd>+ドラッグ <span>画面移動</span></div>
+              <div class="sc-item"><kbd>+</kbd><kbd>-</kbd><kbd>0</kbd> <span>ズーム</span></div>
+              <div class="sc-item"><kbd>Ctrl+S</kbd> <span>保存</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ドラッグ＆ドロップ中のハイライトオーバーレイ -->
+        <div id="dropOverlay" class="drop-overlay" hidden aria-hidden="true">
+          <div class="drop-overlay-box">
+            <span class="drop-overlay-icon">📥</span>
+            <p class="drop-overlay-text">ここにドロップして画像を読み込む (PNG / JPG / WebP)</p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 下部ショートカット・操作ガイドフッター -->
+      <footer class="shortcut-bar" aria-label="操作ガイドおよびショートカット">
+        <span><kbd>B</kbd> ブラシ</span>
+        <span><kbd>R</kbd> 矩形選択 (確定: <kbd>Enter</kbd> / ダブルクリック)</span>
+        <span><kbd>Ctrl+Z</kbd> Undo</span>
+        <span><kbd>Ctrl+Shift+Z</kbd> / <kbd>Ctrl+Y</kbd> Redo</span>
+        <span><kbd>H</kbd> 押下中は原画比較</span>
+        <span><kbd>ホイール</kbd> / <kbd>+</kbd><kbd>-</kbd><kbd>0</kbd> ズーム</span>
+        <span><kbd>中ボタン</kbd> / <kbd>Space</kbd>+ドラッグ パン移動</span>
+        <span><kbd>Ctrl+S</kbd> 保存</span>
+      </footer>
+
+    </main>
+
+  </div>
+
+  <!-- 画面内トースト通知コンテナ -->
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- メインアプリケーションロジック -->
+  <script src="./app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "name": "Pixel Mosaic Tool",
+  "short_name": "Pixel Mosaic",
+  "description": "画像の一部または複数箇所に本格的な平均色グリッドモザイクを適用できるオフライン対応PWAツール",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0d0d0f",
+  "background_color": "#0d0d0f",
+  "categories": [
+    "photo",
+    "utilities",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
