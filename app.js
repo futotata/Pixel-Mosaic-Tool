@@ -64,6 +64,8 @@
 
     // 現在選択中のツール ('brush' | 'rect' | 'pan')
     currentTool: 'brush',
+    // ブラシツールのサブモード ('brush' | 'eraser')
+    brushMode: 'brush',
 
     // ビューポート上のズーム倍率 (0.1〜8.0) とパンオフセット (画面px)
     zoom: 1.0,
@@ -93,7 +95,13 @@
     brushGridCols: 0,
     brushGridRows: 0,
     brushVisitedCells: null, // Uint8Array: 1ストローク内でモザイク適用済みのグリッドセル記録
+    brushPaintedCells: null, // Map<number, { cellX, cellY, cellW, cellH, colorInfo }>: 確定時に mosaicCtx へ塗るセル群
     brushTouchedAny: false,
+
+    // 消しゴムストローク操作中の状態
+    isErasing: false,
+    eraserTouchedAny: false,
+    eraserPreStrokeSnapshot: null, // ピンチ中断時にモザイクレイヤーを復元するためのストローク開始前スナップショット
 
     // 矩形選択操作の状態
     // rectSelection: { x, y, w, h } (画像座標系での選択中矩形。nullなら未選択)
@@ -137,20 +145,37 @@
   };
 
   /* =========================================================================
-   * 3. オフスクリーンキャンバスの生成 (軽量設計: 表示用と作業用を分離)
+   * 3. オフスクリーンキャンバスの生成 (4面構成: 原画 / モザイク専用レイヤー / 合成作業面 / プレビュー面)
    * ========================================================================= */
 
-  /** 原画保持用オフスクリーンキャンバス (比較表示 Before 用) */
+  /** 原画保持用オフスクリーンキャンバス (読み込み後は一切描き換えない。平均色算出元および比較表示 Before 用) */
   const originalCanvas = document.createElement('canvas');
   const originalCtx = originalCanvas.getContext('2d', { willReadFrequently: true });
 
-  /** 作業確定済み画像保持用オフスクリーンキャンバス */
+  /** 透明なモザイク専用レイヤー (モザイクセルの塗りと消しゴムの消去だけが描かれる。履歴スナップショット対象) */
+  const mosaicCanvas = document.createElement('canvas');
+  const mosaicCtx = mosaicCanvas.getContext('2d', { willReadFrequently: true });
+
+  /** 元画像＋モザイクレイヤーの合成結果保持用オフスクリーンキャンバス (通常表示・保存用) */
   const workCanvas = document.createElement('canvas');
   const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
 
-  /** ブラシ塗装中・矩形選択中のリアルタイムプレビュー用オフスクリーンキャンバス */
+  /** ブラシ塗装中・矩形選択中のリアルタイムプレビュー用オフスクリーンキャンバス (ベースは合成済み workCanvas) */
   const previewCanvas = document.createElement('canvas');
   const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
+
+  /**
+   * 元画像 (`originalCanvas`) の上にモザイク専用レイヤー (`mosaicCanvas`) を重ねて
+   * 合成結果キャンバス (`workCanvas`) を再合成します。
+   */
+  function compositeWorkCanvas() {
+    if (!state.hasImage) {
+      return;
+    }
+    workCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+    workCtx.drawImage(originalCanvas, 0, 0);
+    workCtx.drawImage(mosaicCanvas, 0, 0);
+  }
 
   /* =========================================================================
    * 4. DOM要素の参照取得
@@ -193,12 +218,14 @@
     floatingConfirmBtn: document.getElementById('floatingConfirmBtn'),
     floatingCancelBtn: document.getElementById('floatingCancelBtn'),
 
-    // サイズ設定スライダー＆数値入力
+    // サイズ設定スライダー＆数値入力＆ブラシ/消しゴム切替ボタン
     mosaicSizeSlider: document.getElementById('mosaicSizeSlider'),
     mosaicSizeInput: document.getElementById('mosaicSizeInput'),
     brushControlGroup: document.getElementById('brushControlGroup'),
     brushSizeSlider: document.getElementById('brushSizeSlider'),
     brushSizeInput: document.getElementById('brushSizeInput'),
+    brushModeBtn: document.getElementById('brushModeBtn'),
+    eraserModeBtn: document.getElementById('eraserModeBtn'),
 
     // 履歴・比較・保存
     undoBtn: document.getElementById('undoBtn'),
@@ -467,24 +494,57 @@
   }
 
   /**
-   * オフスクリーンキャンバス上の単一グリッドセル (cellX, cellY, cellW, cellH) の
-   * ピクセル平均色を計算して塗りつぶします（ブラシストローク時の高速セル単位処理用）。
+   * 原画 (`originalCanvas`) の指定矩形領域 (rx, ry, rw, rh) から平均色モザイク ImageData を生成し、
+   * 指定されたターゲットコンテキスト (`previewCtx` または `mosaicCtx`) に描画します。
    *
-   * @param {CanvasRenderingContext2D} ctx 対象の2Dコンテキスト
+   * @param {CanvasRenderingContext2D} targetCtx 描画先2Dコンテキスト
+   * @param {number} rx 対象領域の左上X座標
+   * @param {number} ry 対象領域の左上Y座標
+   * @param {number} rw 対象領域の幅
+   * @param {number} rh 対象領域の高さ
+   * @param {number} mosaicSize モザイク1セルのサイズ (1〜200px)
+   */
+  function applyMosaicRegionFromOriginal(targetCtx, rx, ry, rw, rh, mosaicSize) {
+    if (!state.hasImage) {
+      return;
+    }
+    const imgW = state.imageWidth;
+    const imgH = state.imageHeight;
+    const x0 = Math.max(0, Math.min(imgW, Math.floor(rx)));
+    const y0 = Math.max(0, Math.min(imgH, Math.floor(ry)));
+    const x1 = Math.max(0, Math.min(imgW, Math.ceil(rx + rw)));
+    const y1 = Math.max(0, Math.min(imgH, Math.ceil(ry + rh)));
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w < 1 || h < 1) {
+      return;
+    }
+
+    // 必ず原画 (originalCanvas) からピクセルを取得して平均色を算出
+    const subImageData = originalCtx.getImageData(x0, y0, w, h);
+    applyAverageMosaicToImageDataRegion(subImageData, 0, 0, w, h, mosaicSize);
+    targetCtx.putImageData(subImageData, x0, y0);
+  }
+
+  /**
+   * 原画 (`originalCanvas`) 上の単一グリッドセル (cellX, cellY, cellW, cellH) の
+   * ピクセル平均色 (R, G, B, A および CSS fillStyle 文字列) を計算して返します。
+   *
    * @param {number} cellX セルの左上X座標
    * @param {number} cellY セルの左上Y座標
    * @param {number} cellW セルの幅
    * @param {number} cellH セルの高さ
+   * @returns {{ avgR: number, avgG: number, avgB: number, avgA: number, fillStyle: string } | null}
    */
-  function mosaicSingleCellOnContext(ctx, cellX, cellY, cellW, cellH) {
+  function computeCellAverageFromOriginal(cellX, cellY, cellW, cellH) {
     if (cellW <= 0 || cellH <= 0) {
-      return;
+      return null;
     }
-    const cellImgData = ctx.getImageData(cellX, cellY, cellW, cellH);
+    const cellImgData = originalCtx.getImageData(cellX, cellY, cellW, cellH);
     const data = cellImgData.data;
     const totalPixels = cellW * cellH;
-    if (totalPixels <= 1) {
-      return;
+    if (totalPixels <= 0) {
+      return null;
     }
 
     let sumR = 0;
@@ -503,20 +563,43 @@
     const avgG = Math.round(sumG / totalPixels);
     const avgB = Math.round(sumB / totalPixels);
     const avgA = Math.round(sumA / totalPixels);
+    const fillStyle =
+      avgA >= 255
+        ? `rgb(${avgR}, ${avgG}, ${avgB})`
+        : `rgba(${avgR}, ${avgG}, ${avgB}, ${(avgA / 255).toFixed(4)})`;
 
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = avgR;
-      data[i + 1] = avgG;
-      data[i + 2] = avgB;
-      data[i + 3] = avgA;
+    return { avgR, avgG, avgB, avgA, fillStyle };
+  }
+
+  /**
+   * 算出されたセルの平均色で、対象の 2D コンテキスト (`previewCtx` または `mosaicCtx`) の
+   * 矩形セルを `fillRect` で塗りつぶします。
+   *
+   * @param {CanvasRenderingContext2D} ctx 描画先2Dコンテキスト
+   * @param {number} cellX セルの左上X座標
+   * @param {number} cellY セルの左上Y座標
+   * @param {number} cellW セルの幅
+   * @param {number} cellH セルの高さ
+   * @param {{ avgR: number, avgG: number, avgB: number, avgA: number, fillStyle: string }} colorInfo
+   */
+  function fillMosaicCellOnContext(ctx, cellX, cellY, cellW, cellH, colorInfo) {
+    if (!colorInfo || cellW <= 0 || cellH <= 0) {
+      return;
     }
-
-    ctx.putImageData(cellImgData, cellX, cellY);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    if (colorInfo.avgA < 255) {
+      ctx.clearRect(cellX, cellY, cellW, cellH);
+    }
+    ctx.fillStyle = colorInfo.fillStyle;
+    ctx.fillRect(cellX, cellY, cellW, cellH);
+    ctx.restore();
   }
 
   /**
    * ブラシの円形領域 (中心 cx, cy / 直径 brushSize) が重なるグリッドセルを判定し、
-   * 未処理のセルに対して平均色ピクセルモザイクを適用します。
+   * 未処理のセルに対して原画基準の平均色ピクセルモザイクを `previewCanvas` に描画するとともに、
+   * 確定時に `mosaicCanvas` へ書き込むためのセル情報を保持します。
    *
    * @param {number} cx ブラシ中心X座標 (画像座標系)
    * @param {number} cy ブラシ中心Y座標 (画像座標系)
@@ -566,8 +649,14 @@
         const isCenterCell = (col === centerCol && row === centerRow);
         if (isCenterCell || (dx * dx + dy * dy <= radiusSq)) {
           state.brushVisitedCells[cellIdx] = 1;
-          state.brushTouchedAny = true;
-          mosaicSingleCellOnContext(previewCtx, cellX, cellY, cellW, cellH);
+          const colorInfo = computeCellAverageFromOriginal(cellX, cellY, cellW, cellH);
+          if (colorInfo) {
+            state.brushTouchedAny = true;
+            fillMosaicCellOnContext(previewCtx, cellX, cellY, cellW, cellH, colorInfo);
+            if (state.brushPaintedCells) {
+              state.brushPaintedCells.set(cellIdx, { cellX, cellY, cellW, cellH, colorInfo });
+            }
+          }
         }
       }
     }
@@ -594,6 +683,61 @@
       const iy = y0 + (y1 - y0) * t;
       applyBrushStampAtPoint(ix, iy);
     }
+  }
+
+  /**
+   * 消しゴムの円形領域 (中心 cx, cy / 直径 brushSize) を
+   * モザイク専用レイヤー (`mosaicCtx`) 上で `destination-out` により透明に消去します。
+   *
+   * @param {number} cx 消しゴム中心X座標 (画像座標系)
+   * @param {number} cy 消しゴム中心Y座標 (画像座標系)
+   */
+  function applyEraserStampAtPoint(cx, cy) {
+    if (!state.hasImage) {
+      return;
+    }
+    const radius = state.brushSize / 2;
+    const imgW = state.imageWidth;
+    const imgH = state.imageHeight;
+
+    // 消しゴム円が画像領域と重なる場合のみ消去を実行
+    if (cx + radius < 0 || cx - radius > imgW || cy + radius < 0 || cy - radius > imgH) {
+      return;
+    }
+
+    mosaicCtx.save();
+    mosaicCtx.globalCompositeOperation = 'destination-out';
+    mosaicCtx.fillStyle = 'rgba(0, 0, 0, 1)';
+    mosaicCtx.beginPath();
+    mosaicCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+    mosaicCtx.fill();
+    mosaicCtx.restore();
+
+    state.eraserTouchedAny = true;
+  }
+
+  /**
+   * 前回の消しゴム座標 (x0, y0) から今回の座標 (x1, y1) までを線形補間して
+   * `mosaicCtx` を `destination-out` で消去し、`workCanvas` を再合成します。
+   *
+   * @param {number} x0 始点X (画像座標系)
+   * @param {number} y0 始点Y (画像座標系)
+   * @param {number} x1 終点X (画像座標系)
+   * @param {number} y1 終点Y (画像座標系)
+   */
+  function applyEraserStrokeSegment(x0, y0, x1, y1) {
+    const dist = Math.hypot(x1 - x0, y1 - y0);
+    const stepDist = Math.max(1, state.brushSize / 6);
+    const steps = Math.max(1, Math.ceil(dist / stepDist));
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const ix = x0 + (x1 - x0) * t;
+      const iy = y0 + (y1 - y0) * t;
+      applyEraserStampAtPoint(ix, iy);
+    }
+
+    compositeWorkCanvas();
   }
 
   /* =========================================================================
@@ -633,14 +777,15 @@
 
   /**
    * 現在の矩形選択範囲 (`state.rectSelection`) に対して、
-   * `workCanvas` をベースに `previewCanvas` 上へリアルタイムモザイクプレビューを生成します。
+   * 合成済み `workCanvas` をベースに、平均色は必ず原画 (`originalCanvas`) から算出して
+   * `previewCanvas` 上へリアルタイムモザイクプレビューを生成します。
    */
   function updateRectMosaicPreview() {
     if (!state.hasImage) {
       return;
     }
 
-    // まず確定済み作業キャンバスの内容をプレビューキャンバスへ転写
+    // まず確定済み合成作業キャンバスの内容をプレビューキャンバスへ転写
     previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
     previewCtx.drawImage(workCanvas, 0, 0);
 
@@ -650,10 +795,8 @@
       return;
     }
 
-    // 選択矩形部分のImageDataだけを切り出して平均色モザイクを適用（大画像でも超高速）
-    const subImageData = previewCtx.getImageData(sel.x, sel.y, sel.w, sel.h);
-    applyAverageMosaicToImageDataRegion(subImageData, 0, 0, sel.w, sel.h, state.mosaicSize);
-    previewCtx.putImageData(subImageData, sel.x, sel.y);
+    // 選択矩形部分のモザイクは必ず原画 (originalCanvas) から平均色を算出してプレビューに反映
+    applyMosaicRegionFromOriginal(previewCtx, sel.x, sel.y, sel.w, sel.h, state.mosaicSize);
 
     updateRectActionUI();
   }
@@ -680,7 +823,8 @@
   }
 
   /**
-   * 現在選択中の矩形モザイクプレビューを `workCanvas` に本確定し、履歴スタックに保存します。
+   * 現在選択中の矩形領域のモザイクを原画基準で `mosaicCanvas` に描き、
+   * `workCanvas` を再合成して履歴スタックに保存します。
    * 確定ボタン・ダブルクリック・Enterキーから呼ばれます。
    * @param {boolean} [silent=false] トースト通知を抑制するかどうか
    * @returns {boolean} 確定が行われたかどうか
@@ -695,10 +839,12 @@
       return false;
     }
 
-    // 最新のモザイクサイズでプレビューを確実化してから workCanvas へ書き込む
-    updateRectMosaicPreview();
-    workCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
-    workCtx.drawImage(previewCanvas, 0, 0);
+    // 原画 (originalCanvas) から算出した矩形領域モザイクをモザイク専用レイヤー (mosaicCanvas) へ書き込み再合成
+    applyMosaicRegionFromOriginal(mosaicCtx, sel.x, sel.y, sel.w, sel.h, state.mosaicSize);
+    compositeWorkCanvas();
+
+    previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+    previewCtx.drawImage(workCanvas, 0, 0);
 
     const appliedBox = { ...sel };
     state.rectSelection = null;
@@ -737,26 +883,56 @@
   }
 
   /* =========================================================================
-   * 9. Undo / Redo 履歴管理 (最大35段階、ImageData / DataURL対応)
+   * 9. Undo / Redo 履歴管理 (最大35段階、mosaicCanvas をスナップショット対象として保持)
    * ========================================================================= */
 
   /**
-   * 現在の `workCanvas` の状態を履歴スナップショットとして取得します。
+   * 現在のモザイク専用レイヤー (`mosaicCanvas`) の状態を履歴スナップショットとして取得します。
    * 高速な ImageData クローンを基本とし、万が一メモリ制限等で失敗した場合は DataURL にフォールバックします。
    * @returns {{ type: 'imagedata'|'dataurl', data: ImageData|string }}
    */
   function createCanvasSnapshot() {
     try {
-      const imgData = workCtx.getImageData(0, 0, state.imageWidth, state.imageHeight);
+      const imgData = mosaicCtx.getImageData(0, 0, state.imageWidth, state.imageHeight);
       return { type: 'imagedata', data: imgData };
     } catch (err) {
       console.warn('ImageData取得に失敗したためDataURL形式で履歴を保存します:', err);
-      return { type: 'dataurl', data: workCanvas.toDataURL('image/png') };
+      return { type: 'dataurl', data: mosaicCanvas.toDataURL('image/png') };
     }
   }
 
   /**
-   * スナップショットを `workCanvas` および `previewCanvas` に復元します。
+   * スナップショットを `mosaicCanvas` に復元した上で `workCanvas` を再合成し、
+   * `previewCanvas` および表示用キャンバスを同期します。
+   * @param {{ type: 'imagedata'|'dataurl', data: ImageData|string }} snapshot
+   */
+  function restoreMosaicLayerFromSnapshot(snapshot) {
+    if (!snapshot) {
+      return;
+    }
+    if (snapshot.type === 'imagedata') {
+      mosaicCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+      mosaicCtx.putImageData(snapshot.data, 0, 0);
+      compositeWorkCanvas();
+      previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+      previewCtx.drawImage(workCanvas, 0, 0);
+      renderDisplayCanvas();
+    } else if (snapshot.type === 'dataurl') {
+      const img = new Image();
+      img.onload = () => {
+        mosaicCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+        mosaicCtx.drawImage(img, 0, 0);
+        compositeWorkCanvas();
+        previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+        previewCtx.drawImage(workCanvas, 0, 0);
+        renderDisplayCanvas();
+      };
+      img.src = snapshot.data;
+    }
+  }
+
+  /**
+   * 履歴スナップショットを `mosaicCanvas` に復元し、`workCanvas` と `previewCanvas` を同期します。
    * @param {{ type: 'imagedata'|'dataurl', data: ImageData|string }} snapshot
    */
   function restoreCanvasSnapshot(snapshot) {
@@ -768,22 +944,7 @@
     state.rectDragMode = null;
     updateRectActionUI();
 
-    if (snapshot.type === 'imagedata') {
-      workCtx.putImageData(snapshot.data, 0, 0);
-      previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
-      previewCtx.drawImage(workCanvas, 0, 0);
-      renderDisplayCanvas();
-    } else if (snapshot.type === 'dataurl') {
-      const img = new Image();
-      img.onload = () => {
-        workCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
-        workCtx.drawImage(img, 0, 0);
-        previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
-        previewCtx.drawImage(workCanvas, 0, 0);
-        renderDisplayCanvas();
-      };
-      img.src = snapshot.data;
-    }
+    restoreMosaicLayerFromSnapshot(snapshot);
   }
 
   /**
@@ -990,12 +1151,12 @@
 
     // 描画元オフスクリーンキャンバスの選択:
     // - 比較表示中: originalCanvas (原画)
-    // - ブラシ塗装中 または 矩形選択プレビュー中: previewCanvas
-    // - 通常時: workCanvas
+    // - ブラシ塗装中 (brushMode === 'brush') または 矩形選択プレビュー中: previewCanvas
+    // - 通常時および消しゴム消去中 (isErasing): workCanvas (元画像＋モザイクレイヤーの合成面)
     let sourceCanvas = workCanvas;
     if (isComparing) {
       sourceCanvas = originalCanvas;
-    } else if (state.isBrushing || state.rectSelection) {
+    } else if ((state.isBrushing && state.brushMode === 'brush') || state.rectSelection) {
       sourceCanvas = previewCanvas;
     }
 
@@ -1209,11 +1370,61 @@
   }
 
   /* =========================================================================
-   * 11. ツール切替ロジック
+   * 11. ツール切替ロジック & ブラシ/消しゴムモード切替
    * ========================================================================= */
 
   /**
+   * 下部バーのブラシ／消しゴム切替ボタン (`#brushModeBtn` / `#eraserModeBtn`) の
+   * アクティブクラスと `aria-pressed` 属性を `state.brushMode` に同期します。
+   */
+  function updateBrushModeButtonsUI() {
+    const isBrush = state.brushMode === 'brush';
+    const isEraser = state.brushMode === 'eraser';
+    if (dom.brushModeBtn) {
+      dom.brushModeBtn.classList.toggle('active', isBrush);
+      dom.brushModeBtn.setAttribute('aria-pressed', String(isBrush));
+    }
+    if (dom.eraserModeBtn) {
+      dom.eraserModeBtn.classList.toggle('active', isEraser);
+      dom.eraserModeBtn.setAttribute('aria-pressed', String(isEraser));
+    }
+  }
+
+  /**
+   * ステータスバーのツールバッジ (`#statusToolBadge`) の表示文言を
+   * 現在のツール (`state.currentTool`) およびブラシモード (`state.brushMode`) に同期します。
+   */
+  function updateStatusToolBadge() {
+    if (!dom.statusToolBadge) {
+      return;
+    }
+    if (state.currentTool === 'brush') {
+      dom.statusToolBadge.textContent =
+        state.brushMode === 'eraser' ? '🧽 消しゴムモード (E)' : '🖌️ ブラシモード (B)';
+    } else if (state.currentTool === 'rect') {
+      dom.statusToolBadge.textContent = '⬚ 矩形選択モード (R)';
+    } else if (state.currentTool === 'pan') {
+      dom.statusToolBadge.textContent = '✋ パン移動モード (Space)';
+    }
+  }
+
+  /**
+   * ブラシサブモード ('brush' | 'eraser') を設定し、ツールをブラシ (`'brush'`) に切り替えます。
+   * 下部切替ボタン・ショートカット B / E から呼ばれます。
+   * @param {'brush'|'eraser'} mode
+   */
+  function setBrushMode(mode) {
+    if (mode !== 'brush' && mode !== 'eraser') {
+      return;
+    }
+    state.brushMode = mode;
+    updateBrushModeButtonsUI();
+    selectTool('brush');
+  }
+
+  /**
    * 使用するツールを切り替えます ('brush' | 'rect' | 'pan')。
+   * 矩形／パンへ切り替えても `state.brushMode` 自体は保持し、ブラシに戻ると前回のモードが続きます。
    * @param {'brush'|'rect'|'pan'} toolName
    */
   function selectTool(toolName) {
@@ -1228,7 +1439,7 @@
 
     state.currentTool = toolName;
 
-    // ボタンのアクティブ表示と aria-pressed 更新
+    // 左パネルのツールボタンのアクティブ表示と aria-pressed 更新
     const toolButtons = [
       { btn: dom.toolBrushBtn, key: 'brush' },
       { btn: dom.toolRectBtn, key: 'rect' },
@@ -1240,14 +1451,8 @@
       item.btn.setAttribute('aria-pressed', String(isActive));
     }
 
-    // ステータスバーのツールバッジ更新
-    const badgeLabels = {
-      brush: '🖌️ ブラシモード (B)',
-      rect: '⬚ 矩形選択モード (R)',
-      pan: '✋ パン移動モード (Space)'
-    };
-    dom.statusToolBadge.textContent = badgeLabels[toolName];
-
+    updateBrushModeButtonsUI();
+    updateStatusToolBadge();
     updateCanvasCursorStyle();
     renderDisplayCanvas();
   }
@@ -1363,6 +1568,13 @@
     state.mimeType = mimeType || 'image/png';
     state.rectSelection = null;
     state.rectDragMode = null;
+    state.isBrushing = false;
+    state.brushVisitedCells = null;
+    state.brushPaintedCells = null;
+    state.brushTouchedAny = false;
+    state.isErasing = false;
+    state.eraserTouchedAny = false;
+    state.eraserPreStrokeSnapshot = null;
     state.isCompareHold = false;
     state.isCompareToggle = false;
     state.activePointers.clear();
@@ -1370,20 +1582,25 @@
     state.ignoreSinglePointerUntilAllReleased = false;
     updateCompareButtonUI();
 
-    // オフスクリーンキャンバス群を画像実寸に設定して描画
-    for (const c of [originalCanvas, workCanvas, previewCanvas]) {
+    // オフスクリーンキャンバス4面すべてを画像実寸に設定して初期化
+    for (const c of [originalCanvas, mosaicCanvas, workCanvas, previewCanvas]) {
       c.width = width;
       c.height = height;
     }
 
+    // 1. 原画キャンバス (読み込み後は一切描き換えない)
     originalCtx.clearRect(0, 0, width, height);
     originalCtx.drawImage(imgSource, 0, 0);
 
-    workCtx.clearRect(0, 0, width, height);
-    workCtx.drawImage(imgSource, 0, 0);
+    // 2. モザイク専用レイヤーを透明に初期化
+    mosaicCtx.clearRect(0, 0, width, height);
 
+    // 3. 元画像＋モザイクレイヤーを workCanvas に合成
+    compositeWorkCanvas();
+
+    // 4. プレビュー面を合成済み workCanvas と同期
     previewCtx.clearRect(0, 0, width, height);
-    previewCtx.drawImage(imgSource, 0, 0);
+    previewCtx.drawImage(workCanvas, 0, 0);
 
     // 推奨モザイクサイズの算出と常時表示の更新
     // 長辺が400px以上なら 推奨 = ceil(長辺/100)、最小4px
@@ -1936,10 +2153,11 @@
       state.isPanning = false;
     }
 
-    // 2. ブラシストロークの中断 (previewCanvas を確定済み workCanvas で復元し、履歴には追加しない)
+    // 2. ブラシストロークの中断 (previewCanvas を確定済み workCanvas で復元し、モザイクレイヤーや履歴には追加しない)
     if (state.isBrushing) {
       state.isBrushing = false;
       state.brushVisitedCells = null;
+      state.brushPaintedCells = null;
       state.brushTouchedAny = false;
       if (state.hasImage) {
         previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
@@ -1947,7 +2165,17 @@
       }
     }
 
-    // 3. 矩形選択ドラッグの中断
+    // 3. 消しゴムストロークの中断 (ストローク開始前のスナップショットでモザイクレイヤーを復元して再合成し、履歴には追加しない)
+    if (state.isErasing) {
+      state.isErasing = false;
+      state.eraserTouchedAny = false;
+      if (state.hasImage && state.eraserPreStrokeSnapshot) {
+        restoreMosaicLayerFromSnapshot(state.eraserPreStrokeSnapshot);
+      }
+      state.eraserPreStrokeSnapshot = null;
+    }
+
+    // 4. 矩形選択ドラッグの中断
     if (state.rectDragMode) {
       const mode = state.rectDragMode;
       const initialBox = state.rectInitialBox;
@@ -2125,9 +2353,24 @@
       updateCompareButtonUI();
     }
 
-    // 2. ブラシツールでのストローク開始
+    // 2. ブラシツールでのストローク開始 (brushMode に応じてブラシ塗装または消しゴム消去を開始)
     if (state.currentTool === 'brush') {
       e.preventDefault();
+
+      if (state.brushMode === 'eraser') {
+        state.isErasing = true;
+        state.lastBrushImageX = coords.ix;
+        state.lastBrushImageY = coords.iy;
+        state.eraserTouchedAny = false;
+        // ピンチ中断時にモザイクレイヤーを復元できるよう開始前スナップショットを控える
+        state.eraserPreStrokeSnapshot = createCanvasSnapshot();
+
+        applyEraserStampAtPoint(coords.ix, coords.iy);
+        compositeWorkCanvas();
+        renderDisplayCanvas();
+        return;
+      }
+
       state.isBrushing = true;
       state.lastBrushImageX = coords.ix;
       state.lastBrushImageY = coords.iy;
@@ -2137,6 +2380,7 @@
       state.brushGridCols = Math.ceil(state.imageWidth / step);
       state.brushGridRows = Math.ceil(state.imageHeight / step);
       state.brushVisitedCells = new Uint8Array(state.brushGridCols * state.brushGridRows);
+      state.brushPaintedCells = new Map();
 
       // ストローク開始時点の workCanvas を previewCanvas にコピー
       previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
@@ -2227,7 +2471,16 @@
       return;
     }
 
-    // 2. ブラシ塗装中
+    // 2a. 消しゴム消去中
+    if (state.isErasing) {
+      applyEraserStrokeSegment(state.lastBrushImageX, state.lastBrushImageY, coords.ix, coords.iy);
+      state.lastBrushImageX = coords.ix;
+      state.lastBrushImageY = coords.iy;
+      renderDisplayCanvas();
+      return;
+    }
+
+    // 2b. ブラシ塗装中
     if (state.isBrushing) {
       applyBrushStrokeSegment(state.lastBrushImageX, state.lastBrushImageY, coords.ix, coords.iy);
       state.lastBrushImageX = coords.ix;
@@ -2327,14 +2580,37 @@
       return;
     }
 
-    // 2. ブラシストローク終了 → workCanvasへ確定し、履歴に追加
+    // 2a. 消しゴムストローク終了 → 再合成・previewCanvas同期・履歴に追加
+    if (state.isErasing) {
+      state.isErasing = false;
+      state.eraserPreStrokeSnapshot = null;
+
+      if (state.eraserTouchedAny) {
+        state.eraserTouchedAny = false;
+        compositeWorkCanvas();
+        previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+        previewCtx.drawImage(workCanvas, 0, 0);
+        pushHistorySnapshot();
+      }
+      renderDisplayCanvas();
+      return;
+    }
+
+    // 2b. ブラシストローク終了 → 塗ったセル群を mosaicCtx へ平均色で fillRect して再合成し、履歴に追加
     if (state.isBrushing) {
       state.isBrushing = false;
+      const paintedCells = state.brushPaintedCells;
       state.brushVisitedCells = null;
+      state.brushPaintedCells = null;
 
-      if (state.brushTouchedAny) {
-        workCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
-        workCtx.drawImage(previewCanvas, 0, 0);
+      if (state.brushTouchedAny && paintedCells && paintedCells.size > 0) {
+        state.brushTouchedAny = false;
+        for (const cell of paintedCells.values()) {
+          fillMosaicCellOnContext(mosaicCtx, cell.cellX, cell.cellY, cell.cellW, cell.cellH, cell.colorInfo);
+        }
+        compositeWorkCanvas();
+        previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+        previewCtx.drawImage(workCanvas, 0, 0);
         pushHistorySnapshot();
       }
       renderDisplayCanvas();
@@ -2391,6 +2667,10 @@
     dom.toolBrushBtn.addEventListener('click', () => selectTool('brush'));
     dom.toolRectBtn.addEventListener('click', () => selectTool('rect'));
     dom.toolPanBtn.addEventListener('click', () => selectTool('pan'));
+
+    // 下部ブラシ／消しゴム切替ボタン (クリックでブラシツールに切り替わりモードも変更)
+    dom.brushModeBtn.addEventListener('click', () => setBrushMode('brush'));
+    dom.eraserModeBtn.addEventListener('click', () => setBrushMode('eraser'));
 
     // 矩形選択の確定・解除ボタン (パネル内 & フローティングバー両方)
     dom.confirmRectBtn.addEventListener('click', () => confirmRectSelection(false));
@@ -2480,7 +2760,7 @@
     dom.displayCanvas.addEventListener('pointerleave', () => {
       state.cursorInCanvas = false;
       dom.statusCoords.textContent = 'X: - , Y: -';
-      if (state.hasImage && !state.isBrushing && !state.rectDragMode) {
+      if (state.hasImage && !state.isBrushing && !state.isErasing && !state.rectDragMode) {
         renderDisplayCanvas();
       }
     });
@@ -2609,7 +2889,10 @@
       if (!isCtrlOrMeta && !e.altKey) {
         if (lowerKey === 'b') {
           e.preventDefault();
-          selectTool('brush');
+          setBrushMode('brush');
+        } else if (lowerKey === 'e') {
+          e.preventDefault();
+          setBrushMode('eraser');
         } else if (lowerKey === 'r') {
           e.preventDefault();
           selectTool('rect');

@@ -435,6 +435,7 @@
             <!-- ショートカットキー一覧 (初期状態は非表示、body.shortcuts-visible 時に表示) -->
             <div id="shortcutGrid" class="shortcut-grid" aria-label="キーボードショートカット一覧">
               <div class="sc-item"><kbd>B</kbd> <span>ブラシ</span></div>
+              <div class="sc-item"><kbd>E</kbd> <span>消しゴム</span></div>
               <div class="sc-item"><kbd>R</kbd> <span>矩形選択</span></div>
               <div class="sc-item"><kbd>Enter</kbd> <span>矩形確定</span></div>
               <div class="sc-item"><kbd>Ctrl+Z</kbd> <span>元に戻す</span></div>
@@ -457,46 +458,72 @@
 
       </div>
 
-      <!-- 下部ブラシサイズ調節バー (円形プレビュー直径, スライダー+数値連動) -->
+      <!-- 下部ブラシサイズ調節バー (円形プレビュー直径, スライダー+数値連動, ブラシ/消しゴム切替) -->
       <div id="brushControlGroup" class="control-group brush-size-bar">
-        <div class="control-header">
-          <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>
-          <div class="number-input-wrap">
-            <label for="brushSizeInput" class="sr-only">ブラシサイズ数値入力</label>
-            <input
-              type="number"
-              id="brushSizeInput"
-              class="number-input"
-              min="4"
-              max="400"
-              step="1"
-              value="64"
-              aria-label="ブラシサイズ数値入力 (4から400ピクセル)"
-            >
-            <span class="unit-label">px</span>
+        <div class="brush-size-controls">
+          <div class="control-header">
+            <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>
+            <div class="number-input-wrap">
+              <label for="brushSizeInput" class="sr-only">ブラシサイズ数値入力</label>
+              <input
+                type="number"
+                id="brushSizeInput"
+                class="number-input"
+                min="4"
+                max="400"
+                step="1"
+                value="64"
+                aria-label="ブラシサイズ数値入力 (4から400ピクセル)"
+              >
+              <span class="unit-label">px</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            id="brushSizeSlider"
+            class="range-slider range-slider-cyan"
+            min="4"
+            max="400"
+            step="1"
+            value="64"
+            aria-label="ブラシサイズスライダー (4から400ピクセル)"
+          >
+          <div class="range-ticks">
+            <span>4px (細)</span>
+            <span>100px</span>
+            <span>200px</span>
+            <span>400px (太)</span>
           </div>
         </div>
-        <input
-          type="range"
-          id="brushSizeSlider"
-          class="range-slider range-slider-cyan"
-          min="4"
-          max="400"
-          step="1"
-          value="64"
-          aria-label="ブラシサイズスライダー (4から400ピクセル)"
-        >
-        <div class="range-ticks">
-          <span>4px (細)</span>
-          <span>100px</span>
-          <span>200px</span>
-          <span>400px (太)</span>
+
+        <div class="brush-mode-switcher" role="group" aria-label="ブラシ・消しゴム切替">
+          <button
+            type="button"
+            id="brushModeBtn"
+            class="brush-mode-btn active"
+            aria-pressed="true"
+            title="ブラシモード (ショートカット B)"
+            aria-label="ブラシモードに切り替え (ショートカット B)"
+          >
+            🖌️ ブラシ
+          </button>
+          <button
+            type="button"
+            id="eraserModeBtn"
+            class="brush-mode-btn"
+            aria-pressed="false"
+            title="消しゴムモード (ショートカット E)"
+            aria-label="消しゴムモードに切り替え (ショートカット E)"
+          >
+            🧽 消しゴム
+          </button>
         </div>
       </div>
 
       <!-- 下部ショートカット・操作ガイドフッター (初期状態は非表示、body.shortcuts-visible 時に表示) -->
       <footer id="shortcutBar" class="shortcut-bar" aria-label="操作ガイドおよびショートカット">
         <span><kbd>B</kbd> ブラシ</span>
+        <span><kbd>E</kbd> 消しゴム</span>
         <span><kbd>R</kbd> 矩形選択 (確定: <kbd>Enter</kbd> / ダブルクリック)</span>
         <span><kbd>Ctrl+Z</kbd> Undo</span>
         <span><kbd>Ctrl+Shift+Z</kbd> / <kbd>Ctrl+Y</kbd> Redo</span>
