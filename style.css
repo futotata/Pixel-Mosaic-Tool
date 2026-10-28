@@ -806,6 +806,13 @@ body.shortcuts-visible .kbd-hint {
   flex-shrink: 0;
 }
 
+/* ツールバー内の「元に戻す」「やり直す」ボタン */
+#undoToolbarBtn,
+#redoToolbarBtn {
+  padding: 5px 10px;
+  flex-shrink: 0;
+}
+
 /* ツールバー内の「名前を付けて保存」ボタン (アクセントグラデーション #7b5cff → #00d4ff 系で強調) */
 .btn-save-as {
   background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-cyan) 100%);

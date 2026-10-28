@@ -203,6 +203,8 @@
     // 履歴・比較・保存
     undoBtn: document.getElementById('undoBtn'),
     redoBtn: document.getElementById('redoBtn'),
+    undoToolbarBtn: document.getElementById('undoToolbarBtn'),
+    redoToolbarBtn: document.getElementById('redoToolbarBtn'),
     historyStatusText: document.getElementById('historyStatusText'),
     compareHoldBtn: document.getElementById('compareHoldBtn'),
     compareToggleBtn: document.getElementById('compareToggleBtn'),
@@ -858,6 +860,8 @@
 
     dom.undoBtn.disabled = !canUndo;
     dom.redoBtn.disabled = !canRedo;
+    dom.undoToolbarBtn.disabled = !canUndo;
+    dom.redoToolbarBtn.disabled = !canRedo;
 
     const currentStep = Math.max(0, state.historyIndex);
     const totalSteps = Math.max(0, state.historyStack.length - 1);
@@ -2423,6 +2427,8 @@
     // Undo / Redo ボタン
     dom.undoBtn.addEventListener('click', performUndo);
     dom.redoBtn.addEventListener('click', performRedo);
+    dom.undoToolbarBtn.addEventListener('click', performUndo);
+    dom.redoToolbarBtn.addEventListener('click', performRedo);
 
     // 原画比較ボタン (押している間 & トグル固定)
     dom.compareHoldBtn.addEventListener('pointerdown', (e) => {
