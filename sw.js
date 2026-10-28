@@ -6,12 +6,13 @@
  */
 
 // キャッシュバージョン名（ファイル更新時はバージョン番号を上げることで古いキャッシュを破棄）
-const CACHE_NAME = 'pixel-mosaic-tool-v1';
+const CACHE_NAME = 'pixel-mosaic-tool-v2';
 
 // インストール時に事前キャッシュする同一オリジン静的アセット一覧
 const STATIC_ASSETS = [
   './',
   './index.html',
+  './install.html',
   './style.css',
   './app.js',
   './manifest.webmanifest',

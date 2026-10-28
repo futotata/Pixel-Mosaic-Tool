@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<!--
+Pixel Mosaic Tool - Android向けワンタップ・インストール専用画面 (install.html)
+
+役割:
+- スマートフォン (主に Android / Chrome) でこのページを開き、
+大きなボタン1つをタップするだけで PWA のインストールダイアログを表示する。
+- インストール後は「アプリを開く」画面に自動で切り替わる。
+
+PWAインストールの前提条件 (ブラウザ仕様):
+- HTTPS (または localhost) で配信されていること
+- manifest.webmanifest と 192px / 512px のPNGアイコンが配信されていること
+- Service Worker (sw.js) が登録されていること
+これらが揃わない環境ではボタンからダイアログを直接出せないため、
+その場合は Chrome メニューからの手順を自動で案内するフォールバックを表示する。
+-->
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<!-- モバイルファースト: Androidの画面幅に合わせる -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Pixel Mosaic Tool をインストール</title>
+<meta name="description" content="Pixel Mosaic Tool (ピクセルモザイク編集PWA) のAndroid向けインストールページ。ボタン1つでホーム画面に追加できます。">
+<meta name="theme-color" content="#0d0d0f">
+<!-- PWAマニフェスト (インストール判定に必須) -->
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<script>
+// beforeinstallprompt はページ読み込みの早い段階で発火することがあるため、
+// <head> 内のこの時点からイベントを受け取り、グローバル変数に保持しておく。
+// ボタンのクリックハンドラはこの保持したイベントを使ってダイアログを表示する。
+window.__pmtDeferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', function (e) {
+// ブラウザ標準の小さなインストールバナーは抑止し、このページの大きなボタンに任せる
+e.preventDefault();
+window.__pmtDeferredInstallPrompt = e;
+// 本体スクリプト (body末尾) が後から状態を反映できるよう、カスタムイベントでも通知する
+window.dispatchEvent(new Event('pmt-installable'));
+});
+window.addEventListener('appinstalled', function () {
+window.dispatchEvent(new Event('pmt-installed'));
+});
+</script>
+
+<style>
+/* ===== ダークテーマ (本体アプリと統一: #0d0d0f基調 / 紫 #7b5cff / ネオンブルー #00d4ff) ===== */
+:root {
+--bg: #0d0d0f;
+--panel: #16161a;
+--panel2: #1d1d22;
+--text: #e8e8ec;
+--muted: #9a9aa5;
+--accent: #7b5cff;
+--accent2: #00d4ff;
+--ok: #2fd67c;
+--warn: #ffb020;
+--danger: #ff5470;
+--radius: 18px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0;}
+html, body { height: 100%;}
+body {
+font-family: "Noto Sans JP", "BIZ UDPGothic", system-ui, sans-serif;
+background:
+radial-gradient(600px 400px at 85% -10%, rgba(123, 92, 255,.28), transparent 60%),
+radial-gradient(600px 420px at -10% 110%, rgba(0, 212, 255,.16), transparent 60%),
+var(--bg);
+color: var(--text);
+display: flex; align-items: center; justify-content: center;
+padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+min-height: 100dvh;
+}
+.card {
+width: 100%; max-width: 430px;
+background: linear-gradient(180deg, var(--panel2), var(--panel));
+border: 1px solid rgba(255,255,255,.07);
+border-radius: 24px;
+padding: 34px 24px 26px;
+text-align: center;
+box-shadow: 0 24px 60px rgba(0,0,0,.55);
+}
+.icon {
+width: 104px; height: 104px; border-radius: 24px;
+margin: 0 auto 18px;
+box-shadow: 0 12px 32px rgba(123,92,255,.35);
+display: block;
+}
+h1 { font-size: 24px; letter-spacing:.02em;}
+.tagline { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 10px 0 4px;}
+.features {
+text-align: left; margin: 18px auto 6px; max-width: 330px;
+color: var(--text); font-size: 13.5px; line-height: 1.6;
+}
+.features li { list-style: none; padding: 5px 0 5px 26px; position: relative;}
+.features li::before { content: "▦"; position: absolute; left: 2px; color: var(--accent2);}
+/* 巨大インストールボタン: 親指で押しやすい高さ72px以上 */
+.install-btn {
+display: block; width: 100%; min-height: 72px;
+margin-top: 22px; border: none; border-radius: var(--radius);
+font-size: 19px; font-weight: 700; letter-spacing:.03em;
+color: #fff; cursor: pointer;
+background: linear-gradient(90deg, var(--accent), var(--accent2));
+box-shadow: 0 12px 30px rgba(0,212,255,.28);
+padding: 14px 16px;
+}
+.install-btn:active { transform: scale(.985);}
+.install-btn[disabled] { opacity:.45; cursor: wait; box-shadow: none;}
+.install-btn.open-app { background: linear-gradient(90deg, #12995a, var(--ok));}
+.status { min-height: 24px; margin-top: 14px; font-size: 14px;}
+.status.ok { color: var(--ok);}
+.status.warn { color: var(--warn);}
+.status.error { color: var(--danger);}
+/* フォールバック手順 (ダイアログを直接出せない環境向け) */
+.fallback {
+display: none; text-align: left; margin-top: 18px;
+background: rgba(255,176,32,.08);
+border: 1px solid rgba(255,176,32,.35);
+border-radius: 14px; padding: 14px 16px;
+font-size: 13.5px; line-height: 1.8;
+}
+.fallback.show { display: block;}
+.fallback ol { padding-left: 20px;}
+.sub-btn {
+display: block; width: 100%; min-height: 50px; margin-top: 12px;
+border-radius: 12px; border: 1px solid rgba(255,255,255,.16);
+background: transparent; color: var(--text);
+font-size: 15px; cursor: pointer; padding: 10px;
+}
+.note { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 16px;}
+.note a { color: var(--accent2);}
+</style>
+</head>
+<body>
+<main class="card">
+<img class="icon" src="./icons/icon-512.png" alt="Pixel Mosaic Tool アイコン" width="104" height="104"
+onerror="this.onerror=null;this.src='./icons/icon.svg';">
+<h1>Pixel Mosaic Tool</h1>
+<p class="tagline">画像に本格ピクセルモザイクをかける編集アプリ。<br>下のボタン1つで Android にインストールできます。</p>
+
+<ul class="features">
+<li>長辺の1/100を自動で推奨モザイクサイズに</li>
+<li>ブラシ／矩形で複数箇所に平均色モザイク</li>
+<li>Undo 35段階・原画比較・完全オフライン動作</li>
+<li>画像は端末内だけで処理され、外部送信されません</li>
+</ul>
+
+<!-- メインのワンタップ・インストールボタン -->
+<button type="button" id="installBtn" class="install-btn" aria-label="Pixel Mosaic ToolをAndroidにインストール" disabled>
+準備中…
+</button>
+<p id="statusText" class="status" role="status" aria-live="polite">インストールできるか確認しています…</p>
+
+<!-- ダイアログを直接表示できない環境向けの手動手順 -->
+<div id="fallbackBox" class="fallback" aria-live="polite">
+<strong>手動でインストールする手順 (Android / Chrome)</strong>
+<ol>
+<li>Chrome 右上の <strong>⋮ メニュー</strong>を開く</li>
+<li><strong>「アプリをインストール」</strong> または <strong>「ホーム画面に追加」</strong>をタップ</li>
+<li>確認画面で <strong>「インストール」</strong>をタップ</li>
+</ol>
+<p id="fallbackReason"></p>
+</div>
+
+<!-- 既にインストール済みのときだけ出す「開く」ボタンは installBtn が兼用する。
+それとは別に、まずブラウザで試したい人向けの入口 -->
+<button type="button" id="tryBtn" class="sub-btn" aria-label="インストールせずにブラウザでアプリを開く">
+インストールせずにブラウザで試す
+</button>
+
+<p class="note">
+※ インストールには HTTPS 配信と Chrome が必要です。<br>
+LINE等のアプリ内ブラウザでは表示できないため、その場合は Chrome で開き直してください。
+</p>
+</main>
+
+<script>
+// ===== インストール画面の状態管理 =====
+// 状態: checking(確認中) / installable(ワンタップ可) / fallback(手動案内) /
+// installed(済み) / standalone(アプリとして起動中)
+(function () {
+'use strict';
+var installBtn = document.getElementById('installBtn');
+var tryBtn = document.getElementById('tryBtn');
+var statusText = document.getElementById('statusText');
+var fallbackBox = document.getElementById('fallbackBox');
+var fallbackReason = document.getElementById('fallbackReason');
+
+// アプリとして起動中かどうか (ホーム画面から起動した状態)
+function isStandalone() {
+return window.matchMedia('(display-mode: standalone)').matches ||
+window.matchMedia('(display-mode: fullscreen)').matches ||
+window.navigator.standalone === true;
+}
+
+// インストール済み表示に切り替える
+function showInstalled() {
+installBtn.disabled = false;
+installBtn.textContent = '▶ アプリを開く';
+installBtn.classList.add('open-app');
+statusText.textContent = '✓ インストール済みです。ホーム画面からも起動できます。';
+statusText.className = 'status ok';
+fallbackBox.classList.remove('show');
+}
+
+// ワンタップ可能表示に切り替える
+function showInstallable() {
+if (isStandalone()) { showInstalled(); return;}
+installBtn.disabled = false;
+installBtn.textContent = '⬇ Androidにインストール';
+installBtn.classList.remove('open-app');
+statusText.textContent = 'タップするとインストール確認が表示されます。';
+statusText.className = 'status';
+fallbackBox.classList.remove('show');
+}
+
+// ダイアログを直接出せない環境向けの案内に切り替える
+function showFallback(reason) {
+if (isStandalone()) { showInstalled(); return;}
+// ボタンは手動手順へのスクロール兼リトライとして使えるよう有効化しておく
+installBtn.disabled = false;
+installBtn.textContent = '⬇ Androidにインストール';
+statusText.textContent = 'この環境では下の手順からインストールしてください。';
+statusText.className = 'status warn';
+fallbackReason.textContent = reason || '';
+fallbackBox.classList.add('show');
+}
+
+// 初期判定
+if (isStandalone()) {
+showInstalled();
+} else if (window.__pmtDeferredInstallPrompt) {
+showInstallable();
+} else {
+// beforeinstallprompt は少し遅れて届くことがあるため、最大3秒待ってから手動案内にする
+installBtn.textContent = '準備中…';
+setTimeout(function () {
+if (window.__pmtDeferredInstallPrompt) { showInstallable(); return;}
+if (isStandalone()) { showInstalled(); return;}
+var reason = '';
+if (location.protocol!== 'https:' && location.hostname!== 'localhost') {
+reason = '理由: このページが HTTPS で配信されていません。HTTPS のURLで開いてください。';
+} else if (!('serviceWorker' in navigator)) {
+reason = '理由: このブラウザは Service Worker に非対応です。最新の Chrome で開いてください。';
+} else {
+reason = '理由: ブラウザが自動ダイアログの条件をまだ満たしていないか、既にインストール済みの可能性があります。';
+}
+showFallback(reason);
+}, 3000);
+}
+
+// head側で保持したイベントの到着・インストール完了を反映する
+window.addEventListener('pmt-installable', showInstallable);
+window.addEventListener('pmt-installed', showInstalled);
+window.addEventListener('appinstalled', showInstalled);
+
+// ボタンクリック: 本命はワンタップでダイアログ表示
+installBtn.addEventListener('click', async function () {
+// インストール済み表示のときはアプリ本体へ遷移するだけ
+if (installBtn.classList.contains('open-app')) {
+location.href = './index.html';
+return;
+}
+var promptEvent = window.__pmtDeferredInstallPrompt;
+if (!promptEvent) {
+// ダイアログを出せない場合は手動手順を前面に出す
+showFallback('自動ダイアログは表示できませんでした。以下の手順をお試しください。');
+fallbackBox.scrollIntoView({ behavior: 'smooth', block: 'center'});
+return;
+}
+try {
+promptEvent.prompt(); // インストールダイアログを表示
+var choice = await promptEvent.userChoice; // ユーザーの選択を待つ
+window.__pmtDeferredInstallPrompt = null; // イベントは1回だけ有効
+if (choice && choice.outcome === 'accepted') {
+statusText.textContent = 'インストールを受け付けました。ホーム画面に追加されます…';
+statusText.className = 'status ok';
+installBtn.disabled = true;
+installBtn.textContent = 'インストール中…';
+// appinstalled が届けば showInstalled() に切り替わる。届かない環境向けの保険:
+setTimeout(showInstalled, 2500);
+} else {
+statusText.textContent = 'キャンセルされました。いつでも上のボタンから再試行できます。';
+statusText.className = 'status warn';
+}
+} catch (err) {
+console.error('[Install] ダイアログ表示に失敗:', err);
+showFallback('ダイアログ表示でエラーが発生しました。以下の手順をお試しください。');
+}
+});
+
+// ブラウザで試すボタン
+tryBtn.addEventListener('click', function () {
+location.href = './index.html';
+});
+
+// Service Worker 登録 (インストール判定とオフライン動作に必須)
+if ('serviceWorker' in navigator) {
+window.addEventListener('load', function () {
+navigator.serviceWorker.register('./sw.js')
+.catch(function (err) { console.warn('[Install] SW登録に失敗:', err);});
+});
+}
+})();
+</script>
+</body>
+</html>
