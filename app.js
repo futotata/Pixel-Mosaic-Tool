@@ -207,6 +207,7 @@
     compareHoldBtn: document.getElementById('compareHoldBtn'),
     compareToggleBtn: document.getElementById('compareToggleBtn'),
     saveBtn: document.getElementById('saveBtn'),
+    saveAsBtn: document.getElementById('saveAsBtn'),
 
     // Wake Lock & 別ウィンドウ & ショートカット説明表示トグル
     wakeLockToggle: document.getElementById('wakeLockToggle'),
@@ -1399,6 +1400,7 @@
     // 初期画面を隠して操作ボタンを有効化
     dom.emptyStateBox.hidden = true;
     dom.saveBtn.disabled = false;
+    dom.saveAsBtn.disabled = false;
     dom.compareHoldBtn.disabled = false;
     dom.compareToggleBtn.disabled = false;
 
@@ -1523,50 +1525,227 @@
   }
 
   /**
-   * 編集後の画像を元ファイル名 + "_mosaic" + 元の拡張子、元の形式維持（JPEGはquality 0.92）で保存します。
+   * 既定の保存ファイル名（元ファイル名_mosaic.拡張子）を返します。
+   * @returns {string}
    */
-  function saveEditedImage() {
+  function getDefaultSaveFileName() {
+    const base = state.baseFileName || 'image';
+    const ext = state.originalExt || '.png';
+    return `${base}_mosaic${ext}`;
+  }
+
+  /**
+   * ユーザー入力の保存ファイル名をサニタイズし、編集中画像の拡張子に揃えます。
+   * - パス区切り文字 (/ や \) およびOS不正文字 (: * ? " < > | 制御文字) を除去
+   * - 拡張子が無い場合は元の拡張子を補う
+   * - 拡張子が元の形式と違う場合は元の拡張子に付け替える
+   *
+   * @param {string} rawName 入力されたファイル名
+   * @returns {string} サニタイズ済みの安全なファイル名
+   */
+  function sanitizeSaveFileName(rawName) {
+    const targetExt = state.originalExt || '.png';
+    const defaultStem = `${state.baseFileName || 'image'}_mosaic`;
+
+    // パス区切り文字およびファイル名不正文字・制御文字を除去
+    let cleaned = String(rawName || '')
+      .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '')
+      .trim();
+
+    // 先頭の連続ドットを除去
+    cleaned = cleaned.replace(/^\.+/, '').trim();
+
+    if (!cleaned) {
+      return `${defaultStem}${targetExt}`;
+    }
+
+    const lastDotIndex = cleaned.lastIndexOf('.');
+    let stem = cleaned;
+
+    if (lastDotIndex > 0) {
+      const extPart = cleaned.slice(lastDotIndex);
+      // 末尾がドットのみ、または拡張子形式 (.png, .jpg 等) の場合は元の拡張子に付け替えるためベース名のみ抽出
+      if (extPart === '.' || /^\.(?:[a-zA-Z][a-zA-Z0-9]{0,9}|7z|3gp)$/i.test(extPart)) {
+        stem = cleaned.slice(0, lastDotIndex).trim().replace(/\.+$/, '');
+      }
+    } else if (lastDotIndex === 0) {
+      stem = '';
+    }
+
+    if (!stem) {
+      stem = defaultStem;
+    }
+
+    return `${stem}${targetExt}`;
+  }
+
+  /**
+   * File System Access API (showSaveFilePicker) 用のファイル種別フィルタ定義を
+   * 現在編集中の画像形式に合わせて生成します。
+   * @returns {Array<{ description: string, accept: Record<string, string[]> }>}
+   */
+  function getSaveFilePickerTypes() {
+    const exportMime = state.mimeType || 'image/png';
+    if (exportMime === 'image/jpeg') {
+      return [
+        {
+          description: 'JPEG 画像',
+          accept: { 'image/jpeg': ['.jpg', '.jpeg'] }
+        }
+      ];
+    }
+    if (exportMime === 'image/webp') {
+      return [
+        {
+          description: 'WebP 画像',
+          accept: { 'image/webp': ['.webp'] }
+        }
+      ];
+    }
+    return [
+      {
+        description: 'PNG 画像',
+        accept: { 'image/png': ['.png'] }
+      }
+    ];
+  }
+
+  /**
+   * 保存前の共通前処理を実行します。
+   * パネルアラートを閉じ、未確定の矩形選択プレビューがある場合は保存漏れ防止のため自動確定します。
+   */
+  function prepareCanvasBeforeSave() {
+    hidePanelAlert();
+    if (state.rectSelection && state.rectSelection.w >= 1 && state.rectSelection.h >= 1) {
+      confirmRectSelection(true);
+    }
+  }
+
+  /**
+   * 作業用オフスクリーンキャンバス (`workCanvas`) から元の画像形式を維持した Blob を生成します。
+   * JPEG形式の場合は品質パラメータ 0.92 を適用します。
+   * @returns {Promise<Blob | null>}
+   */
+  function createExportBlobFromWorkCanvas() {
+    const exportMime = state.mimeType || 'image/png';
+    const exportQuality = exportMime === 'image/jpeg' ? JPEG_EXPORT_QUALITY : undefined;
+    return new Promise((resolve) => {
+      workCanvas.toBlob((blob) => resolve(blob), exportMime, exportQuality);
+    });
+  }
+
+  /**
+   * 生成された画像 Blob を指定ファイル名でブラウザダウンロードとして保存します。
+   * @param {Blob} blob 保存する画像データ
+   * @param {string} outputFileName 保存ファイル名
+   */
+  function triggerBlobDownload(blob, outputFileName) {
+    try {
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = outputFileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 3000);
+      showToast(`「${outputFileName}」を保存しました`, 'success', 4000);
+    } catch (dlErr) {
+      reportError('ファイルのダウンロード処理に失敗しました。', dlErr);
+    }
+  }
+
+  /**
+   * 編集後の画像を元の形式維持（JPEGはquality 0.92）で保存します。
+   * ファイル名が指定された場合はサニタイズしてその名前で保存し、
+   * 省略時（既存の保存ボタンや Ctrl+S）は既定の「元ファイル名_mosaic.拡張子」で保存します。
+   *
+   * @param {string} [customFileName] 保存ファイル名（省略時は既定の _mosaic 名）
+   */
+  async function saveEditedImage(customFileName) {
     if (!state.hasImage) {
       return;
     }
 
     try {
-      hidePanelAlert();
+      // 保存前の共通前処理（未確定の矩形選択の自動確定など）
+      prepareCanvasBeforeSave();
 
-      // もし未確定の矩形選択プレビューがある場合は、保存漏れを防ぐため自動確定して履歴に追加
-      if (state.rectSelection && state.rectSelection.w >= 1 && state.rectSelection.h >= 1) {
-        confirmRectSelection(true);
+      const outputFileName =
+        typeof customFileName === 'string' && customFileName.trim() !== ''
+          ? sanitizeSaveFileName(customFileName)
+          : getDefaultSaveFileName();
+
+      const blob = await createExportBlobFromWorkCanvas();
+      if (!blob) {
+        reportError('画像の保存データ生成に失敗しました。ブラウザのメモリ空き容量をご確認ください。');
+        return;
       }
 
-      const outputFileName = `${state.baseFileName}_mosaic${state.originalExt}`;
-      const exportMime = state.mimeType || 'image/png';
-      const exportQuality = exportMime === 'image/jpeg' ? JPEG_EXPORT_QUALITY : undefined;
+      triggerBlobDownload(blob, outputFileName);
+    } catch (err) {
+      reportError('画像の保存処理中にエラーが発生しました。', err);
+    }
+  }
 
-      workCanvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reportError('画像の保存データ生成に失敗しました。ブラウザのメモリ空き容量をご確認ください。');
+  /**
+   * 「名前を付けて保存」ボタンの処理。
+   * - `window.showSaveFilePicker` が利用可能な環境ではファイル保存ダイアログを表示して保存します。
+   * - 利用できない環境（Android Chrome等）では `prompt()` でファイル名を入力（キャンセル時は保存中止）し、
+   *   サニタイズしたファイル名で共通保存処理 `saveEditedImage()` を呼び出します。
+   */
+  async function saveEditedImageAs() {
+    if (!state.hasImage) {
+      return;
+    }
+
+    try {
+      // 保存前の共通前処理（未確定の矩形選択の自動確定など）
+      prepareCanvasBeforeSave();
+
+      const defaultFileName = getDefaultSaveFileName();
+
+      // 1. File System Access API (window.showSaveFilePicker) が使える環境
+      if (typeof window.showSaveFilePicker === 'function') {
+        let fileHandle;
+        try {
+          fileHandle = await window.showSaveFilePicker({
+            suggestedName: defaultFileName,
+            types: getSaveFilePickerTypes()
+          });
+        } catch (pickerErr) {
+          // ユーザーが保存ダイアログをキャンセルした場合はエラー表示せず終了
+          if (pickerErr && pickerErr.name === 'AbortError') {
             return;
           }
+          throw pickerErr;
+        }
 
-          try {
-            const downloadUrl = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = downloadUrl;
-            anchor.download = outputFileName;
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
+        const blob = await createExportBlobFromWorkCanvas();
+        if (!blob) {
+          reportError('画像の保存データ生成に失敗しました。ブラウザのメモリ空き容量をご確認ください。');
+          return;
+        }
 
-            window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 3000);
-            showToast(`「${outputFileName}」を保存しました`, 'success', 4000);
-          } catch (dlErr) {
-            reportError('ファイルのダウンロード処理に失敗しました。', dlErr);
-          }
-        },
-        exportMime,
-        exportQuality
-      );
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+
+        const savedFileName = fileHandle.name || defaultFileName;
+        showToast(`「${savedFileName}」を保存しました`, 'success', 4000);
+        return;
+      }
+
+      // 2. showSaveFilePicker が使えない環境（Android Chrome等）では prompt() でファイル名を入力
+      const rawInput = window.prompt('保存するファイル名を入力してください:', defaultFileName);
+      if (rawInput === null) {
+        // キャンセルされた場合は保存しない
+        return;
+      }
+
+      const sanitizedFileName = sanitizeSaveFileName(rawInput);
+      await saveEditedImage(sanitizedFileName);
     } catch (err) {
       reportError('画像の保存処理中にエラーが発生しました。', err);
     }
@@ -2262,8 +2441,9 @@
     });
     dom.compareToggleBtn.addEventListener('click', toggleCompareFixed);
 
-    // 保存ボタン
-    dom.saveBtn.addEventListener('click', saveEditedImage);
+    // 保存ボタン & 名前を付けて保存ボタン
+    dom.saveBtn.addEventListener('click', () => saveEditedImage());
+    dom.saveAsBtn.addEventListener('click', saveEditedImageAs);
 
     // Wake Lock トグル & 別ウィンドウ起動
     dom.wakeLockToggle.addEventListener('change', (e) => {
