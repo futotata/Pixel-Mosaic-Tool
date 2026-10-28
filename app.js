@@ -108,6 +108,23 @@
     isCompareHold: false,   // Hキーまたは「押下中は原画」ボタン押下中
     isCompareToggle: false, // トグルボタンによる原画固定表示
 
+    // ショートカットキー説明の表示フラグ (初期状態はデフォルト非表示: false)
+    shortcutsVisible: false,
+
+    // マルチタッチ・2本指ピンチズーム追跡用の状態
+    // activePointers: Map<number, { clientX: number, clientY: number }> (キャンバスに触れているアクティブなポインタ)
+    activePointers: new Map(),
+    // 現在2本指ピンチ操作中かどうか
+    isPinching: false,
+    // ピンチ操作が発生した後、全ての指が離れるまで1本指の描画・選択・パン再開を抑止するフラグ
+    ignoreSinglePointerUntilAllReleased: false,
+    // ピンチ開始時の2本指間の距離 (px) と開始時ズーム倍率
+    pinchStartDist: 0,
+    pinchStartZoom: 1.0,
+    // 直前フレームにおける2本指の中点座標 (ビューポートCSS座標系)
+    pinchPrevMidVx: 0,
+    pinchPrevMidVy: 0,
+
     // Undo / Redo 履歴スタック
     // 各要素は { type: 'imagedata' | 'dataurl', data: ImageData | string }
     historyStack: [],
@@ -191,10 +208,12 @@
     compareToggleBtn: document.getElementById('compareToggleBtn'),
     saveBtn: document.getElementById('saveBtn'),
 
-    // Wake Lock & 別ウィンドウ
+    // Wake Lock & 別ウィンドウ & ショートカット説明表示トグル
     wakeLockToggle: document.getElementById('wakeLockToggle'),
     wakeLockStatus: document.getElementById('wakeLockStatus'),
     openWindowBtn: document.getElementById('openWindowBtn'),
+    toggleShortcutsBtn: document.getElementById('toggleShortcutsBtn'),
+    toggleShortcutsBtnText: document.getElementById('toggleShortcutsBtnText'),
 
     // キャンバス・ステータスバー・ズーム
     statusToolBadge: document.getElementById('statusToolBadge'),
@@ -206,10 +225,12 @@
     zoomResetBtn: document.getElementById('zoomResetBtn'),
     zoomFitBtn: document.getElementById('zoomFitBtn'),
 
-    // ビューポート・表示用キャンバス・オーバーレイ
+    // ビューポート・表示用キャンバス・オーバーレイ・ショートカット説明領域
     canvasViewport: document.getElementById('canvasViewport'),
     displayCanvas: document.getElementById('displayCanvas'),
     emptyStateBox: document.getElementById('emptyStateBox'),
+    shortcutGrid: document.getElementById('shortcutGrid'),
+    shortcutBar: document.getElementById('shortcutBar'),
     dropOverlay: document.getElementById('dropOverlay'),
     toastContainer: document.getElementById('toastContainer')
   };
@@ -1000,6 +1021,7 @@
         state.currentTool === 'brush' &&
         !state.isSpacePressed &&
         !state.isPanning &&
+        !state.isPinching &&
         state.cursorInCanvas
       ) {
         drawBrushCursorPreview(displayCtx);
@@ -1338,6 +1360,9 @@
     state.rectDragMode = null;
     state.isCompareHold = false;
     state.isCompareToggle = false;
+    state.activePointers.clear();
+    state.isPinching = false;
+    state.ignoreSinglePointerUntilAllReleased = false;
     updateCompareButtonUI();
 
     // オフスクリーンキャンバス群を画像実寸に設定して描画
@@ -1662,15 +1687,227 @@
     }
   }
 
+  /**
+   * ショートカットキー説明 (.shortcut-bar / .shortcut-grid / .kbd-hint) の表示・非表示を一括制御します。
+   * 仕様:
+   * - 初期状態では body にクラスを付与せず (shortcuts-visible 無し)、3種類すべての説明を非表示にします。
+   * - トグル時は body.shortcuts-visible クラスの付け替えと、トグルボタンの aria-expanded 属性更新を行います。
+   * - 下部フッター (.shortcut-bar) の表示/非表示によりキャンバスビューポートの高さが変化するため、
+   *   切り替え直後に resizeDisplayCanvas() を呼んでキャンバスサイズを即座に再調整します。
+   *
+   * @param {boolean} visible 表示する場合は true、非表示にする場合は false
+   */
+  function setShortcutsVisible(visible) {
+    state.shortcutsVisible = Boolean(visible);
+    document.body.classList.toggle('shortcuts-visible', state.shortcutsVisible);
+
+    if (dom.toggleShortcutsBtn) {
+      dom.toggleShortcutsBtn.setAttribute('aria-expanded', String(state.shortcutsVisible));
+      dom.toggleShortcutsBtn.classList.toggle('shortcuts-toggle-active', state.shortcutsVisible);
+    }
+    if (dom.toggleShortcutsBtnText) {
+      dom.toggleShortcutsBtnText.textContent = state.shortcutsVisible
+        ? 'ショートカット説明: ON'
+        : 'ショートカット説明: OFF';
+    }
+
+    // フッター (.shortcut-bar) の高さ増減に合わせて表示用キャンバスの解像度を再調整
+    resizeDisplayCanvas();
+  }
+
+  /**
+   * ショートカットキー説明の表示・非表示をトグル切り替えします。
+   */
+  function toggleShortcutsVisible() {
+    setShortcutsVisible(!state.shortcutsVisible);
+  }
+
   /* =========================================================================
-   * 15. キャンバス上のマウス・ポインターイベント処理
+   * 15. キャンバス上のマウス・ポインターイベント処理 & 2本指ピンチズーム
    * ========================================================================= */
+
+  /**
+   * 1本指での操作中に2本目の指が触れてピンチモードへ移行する際、
+   * 進行中の1本指操作 (ブラシ描画・矩形選択ドラッグ・パン移動) を安全に中断します。
+   *
+   * 【履歴 (Undoスタック) や確定画像が壊れない理由】:
+   * 1. ブラシ描画中 (`state.isBrushing`):
+   *    本アプリではストローク中、確定用の `workCanvas` は一切書き換えず、`previewCanvas` 上でのみ
+   *    モザイクセルを塗りつぶし、`pointerup` 時に初めて `workCanvas` へ転写して `pushHistorySnapshot()` を呼ぶ構造です。
+   *    したがって、ピンチ移行時に `state.isBrushing = false` 等にリセットし、`previewCanvas` を
+   *    ストローク開始前の `workCanvas` の内容で上書き復元するだけで、1本目の指が触れた瞬間に引かれた
+   *    中途半端なモザイクを完全に破棄でき、`workCanvas` や `historyStack` は一切汚染されません。
+   * 2. 矩形ドラッグ中 (`state.rectDragMode`):
+   *    矩形選択も確定操作を行うまでは `previewCanvas` 上のプレビューのみであり、`workCanvas` や履歴は未変更です。
+   *    - 新規作成ドラッグ中 (`rectDragMode === 'create'`) にピンチへ入った場合は、1本目の指で作りかけた
+   *      中途半端な矩形を `cancelRectSelection()` で破棄し、`previewCanvas` を `workCanvas` に戻します。
+   *    - 既存の選択矩形の移動・リサイズ中 (`state.rectInitialBox` がある場合) にピンチへ入った場合は、
+   *      ドラッグ開始前の矩形 (`state.rectInitialBox`) に巻き戻してプレビューを再計算することで、
+   *      既存の選択枠を失わずにドラッグ変形だけを安全に中断します。
+   * 3. パン移動中 (`state.isPanning`):
+   *    `state.isPanning = false` に戻すことで、そのまま2本指中点によるパン移動へシームレスに移行します。
+   */
+  function abortOngoingSinglePointerActionForPinch() {
+    // 1. パン操作の中断
+    if (state.isPanning) {
+      state.isPanning = false;
+    }
+
+    // 2. ブラシストロークの中断 (previewCanvas を確定済み workCanvas で復元し、履歴には追加しない)
+    if (state.isBrushing) {
+      state.isBrushing = false;
+      state.brushVisitedCells = null;
+      state.brushTouchedAny = false;
+      if (state.hasImage) {
+        previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
+        previewCtx.drawImage(workCanvas, 0, 0);
+      }
+    }
+
+    // 3. 矩形選択ドラッグの中断
+    if (state.rectDragMode) {
+      const mode = state.rectDragMode;
+      const initialBox = state.rectInitialBox;
+      state.rectDragMode = null;
+      state.rectInitialBox = null;
+
+      if (mode === 'create') {
+        // 1本目の指で新規にドラッグし始めたばかりの矩形はキャンセルして破棄
+        cancelRectSelection();
+      } else if (initialBox && state.hasImage) {
+        // 既存矩形の移動やリサイズ中だった場合はドラッグ開始前の矩形に戻す
+        state.rectSelection = { ...initialBox };
+        updateRectMosaicPreview();
+      }
+    }
+  }
+
+  /**
+   * `state.activePointers` の先頭2本のポインタ座標から、
+   * 2本指の距離 (`dist`) とビューポート左上基準の中点 (`midVx`, `midVy`) を算出します。
+   *
+   * @returns {{ dist: number, midVx: number, midVy: number } | null}
+   */
+  function getTwoPointersGeometry() {
+    if (state.activePointers.size < 2) {
+      return null;
+    }
+    const iter = state.activePointers.values();
+    const p1 = iter.next().value;
+    const p2 = iter.next().value;
+
+    const rect = dom.canvasViewport.getBoundingClientRect();
+    const midClientX = (p1.clientX + p2.clientX) / 2;
+    const midClientY = (p1.clientY + p2.clientY) / 2;
+
+    const midVx = midClientX - rect.left;
+    const midVy = midClientY - rect.top;
+    const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+
+    return { dist, midVx, midVy };
+  }
+
+  /**
+   * アクティブなポインタが2本になった時点でピンチモードを開始します。
+   * 進行中の1本指操作を安全に中断し、全ての指が離れるまで1本指描画を再開しないロックをかけます。
+   */
+  function startPinchGesture() {
+    abortOngoingSinglePointerActionForPinch();
+
+    state.isPinching = true;
+    state.ignoreSinglePointerUntilAllReleased = true;
+
+    const geom = getTwoPointersGeometry();
+    if (geom) {
+      // ゼロ除算防止のため最小距離を 1px 以上に保証
+      state.pinchStartDist = Math.max(1, geom.dist);
+      state.pinchStartZoom = state.zoom;
+      state.pinchPrevMidVx = geom.midVx;
+      state.pinchPrevMidVy = geom.midVy;
+    }
+
+    updateCanvasCursorStyle();
+    renderDisplayCanvas();
+  }
+
+  /**
+   * 2本指ピンチ中のポインタ移動に応じて、中点基準のズームおよび2本指ドラッグによるパンを同時実行します。
+   * 既存の `setZoomLevel(倍率, 中心x, 中心y)` の仕組みを活かしてズーム範囲 (0.1〜8.0倍) でクランプします。
+   */
+  function updatePinchGesture() {
+    if (!state.hasImage || !state.isPinching || state.activePointers.size < 2) {
+      return;
+    }
+
+    const geom = getTwoPointersGeometry();
+    if (!geom) {
+      return;
+    }
+
+    // 1. 前回フレームの中点から今回の中点への移動量をパンオフセットに加算 (2本指ドラッグ移動)
+    const deltaMidX = geom.midVx - state.pinchPrevMidVx;
+    const deltaMidY = geom.midVy - state.pinchPrevMidVy;
+    state.panX += deltaMidX;
+    state.panY += deltaMidY;
+
+    // 2. 2本指の距離の変化率から目標ズーム倍率を計算し、既存のズーム範囲 (MIN_ZOOM=0.1 〜 MAX_ZOOM=8.0) でクランプ
+    const currentDist = Math.max(1, geom.dist);
+    const scaleRatio = currentDist / Math.max(1, state.pinchStartDist);
+    const rawTargetZoom = state.pinchStartZoom * scaleRatio;
+    const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawTargetZoom));
+
+    // 2本指の中点 (geom.midVx, geom.midVy) を中心として setZoomLevel で拡大・縮小および再描画を実行
+    setZoomLevel(clampedZoom, geom.midVx, geom.midVy);
+
+    // ズーム倍率が上下限 (0.1倍 または 8.0倍) に達している場合は、逆方向へピンチした際に即座に反応できるよう基準を更新
+    if (rawTargetZoom < MIN_ZOOM || rawTargetZoom > MAX_ZOOM) {
+      state.pinchStartDist = currentDist;
+      state.pinchStartZoom = state.zoom;
+    }
+
+    // 3. 次回フレーム用に現在の中点座標を保存
+    state.pinchPrevMidVx = geom.midVx;
+    state.pinchPrevMidVy = geom.midVy;
+  }
 
   /**
    * キャンバス上でポインターが押下されたときの処理
    * @param {PointerEvent} e
    */
   function handleCanvasPointerDown(e) {
+    // マウスの右クリック等の非対象ボタンは無視（タッチや左・中クリックのみ対象）
+    if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) {
+      return;
+    }
+
+    // キャンバスに触れているアクティブなポインタを Map (pointerId → 座標) に登録して追跡
+    state.activePointers.set(e.pointerId, {
+      clientX: e.clientX,
+      clientY: e.clientY
+    });
+    try {
+      dom.displayCanvas.setPointerCapture(e.pointerId);
+    } catch (_) {
+      // 合成イベント等で pointerId がキャプチャ不可な環境でもエラーにしない
+    }
+
+    // ポインタが2本以上になったらピンチモードに入る (進行中の1本指操作は安全に中断)
+    if (state.activePointers.size >= 2) {
+      e.preventDefault();
+      if (state.hasImage) {
+        startPinchGesture();
+      } else {
+        state.ignoreSinglePointerUntilAllReleased = true;
+      }
+      return;
+    }
+
+    // ピンチ後にまだ全ての指が離れていない場合は、残った指や再タッチで描画が再開されないよう無視する
+    if (state.ignoreSinglePointerUntilAllReleased) {
+      e.preventDefault();
+      return;
+    }
+
     if (!state.hasImage) {
       return;
     }
@@ -1690,12 +1927,11 @@
       state.panStartClientY = e.clientY;
       state.panOriginX = state.panX;
       state.panOriginY = state.panY;
-      dom.displayCanvas.setPointerCapture(e.pointerId);
       updateCanvasCursorStyle();
       return;
     }
 
-    // 左クリック以外は無視
+    // 左クリック（または1本指タッチ・ペン）以外は無視
     if (e.button !== 0) {
       return;
     }
@@ -1723,7 +1959,6 @@
       previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
       previewCtx.drawImage(workCanvas, 0, 0);
 
-      dom.displayCanvas.setPointerCapture(e.pointerId);
       applyBrushStampAtPoint(coords.ix, coords.iy);
       renderDisplayCanvas();
       return;
@@ -1754,7 +1989,6 @@
         updateRectMosaicPreview();
       }
 
-      dom.displayCanvas.setPointerCapture(e.pointerId);
       renderDisplayCanvas();
     }
   }
@@ -1764,6 +1998,28 @@
    * @param {PointerEvent} e
    */
   function handleCanvasPointerMove(e) {
+    // 追跡中のアクティブポインタであれば最新座標を Map に反映
+    if (state.activePointers.has(e.pointerId)) {
+      state.activePointers.set(e.pointerId, {
+        clientX: e.clientX,
+        clientY: e.clientY
+      });
+    }
+
+    // 2本指ピンチモード中はピンチズーム＆2本指パンのみを行い、1本指の描画処理は行わない
+    if (state.isPinching) {
+      if (state.hasImage && state.activePointers.size >= 2) {
+        e.preventDefault();
+        updatePinchGesture();
+      }
+      return;
+    }
+
+    // ピンチ中に指が1本に戻った後、全ての指が離れるまでは残った指での描画再開を無視する
+    if (state.ignoreSinglePointerUntilAllReleased) {
+      return;
+    }
+
     const coords = clientToImageCoords(e.clientX, e.clientY);
     state.cursorInCanvas = true;
     state.cursorViewportX = coords.vx;
@@ -1847,12 +2103,37 @@
   }
 
   /**
-   * キャンバス上でポインターが離されたときの処理
+   * キャンバス上でポインターが離された、またはキャンセルされたときの処理 (`pointerup` / `pointercancel` 共通)
    * @param {PointerEvent} e
    */
   function handleCanvasPointerUp(e) {
     if (dom.displayCanvas.hasPointerCapture(e.pointerId)) {
-      dom.displayCanvas.releasePointerCapture(e.pointerId);
+      try {
+        dom.displayCanvas.releasePointerCapture(e.pointerId);
+      } catch (_) {
+        // キャプチャ解放失敗時は無視
+      }
+    }
+
+    // 離れた（またはキャンセルされた）ポインタを Map から確実に削除
+    state.activePointers.delete(e.pointerId);
+
+    // ピンチ操作中、またはピンチ後の全指リリース待ち状態だった場合の処理
+    if (state.isPinching || state.ignoreSinglePointerUntilAllReleased) {
+      if (state.activePointers.size >= 2 && state.hasImage) {
+        // 3本指以上から1本離れて2本指が残っている場合は、残りの2本指でピンチ基準を再初期化して継続
+        startPinchGesture();
+      } else {
+        // ポインタが2本未満になったらピンチ自体は終了
+        state.isPinching = false;
+        // 全ての指がキャンバスから離れた時点で初めて1本指描画ロックを解除する
+        if (state.activePointers.size === 0) {
+          state.ignoreSinglePointerUntilAllReleased = false;
+        }
+        updateCanvasCursorStyle();
+        renderDisplayCanvas();
+      }
+      return;
     }
 
     // 1. パン終了
@@ -1995,6 +2276,9 @@
       }
     });
     dom.openWindowBtn.addEventListener('click', openAppInSeparateWindow);
+
+    // ショートカットキー説明の表示/非表示トグルボタン
+    dom.toggleShortcutsBtn.addEventListener('click', toggleShortcutsVisible);
 
     // ズームボタン群
     dom.zoomInBtn.addEventListener('click', () => setZoomLevel(state.zoom * 1.25));
@@ -2240,6 +2524,8 @@
 
   function initApp() {
     bindAllEvents();
+    // 初期状態ではショートカット説明を非表示 (body.shortcuts-visible クラス無し) に設定
+    setShortcutsVisible(false);
     setMosaicSize(state.mosaicSize, false);
     setBrushSize(state.brushSize);
     resizeDisplayCanvas();

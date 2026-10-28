@@ -381,9 +381,9 @@ body {
   color: var(--accent-cyan);
 }
 
-/* キーボードヒントバッジ */
+/* キーボードヒントバッジ (初期状態は非表示、body.shortcuts-visible 時にのみ表示) */
 .kbd-hint {
-  display: inline-block;
+  display: none;
   padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -392,6 +392,10 @@ body {
   background-color: rgba(0, 0, 0, 0.38);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 4px;
+}
+
+body.shortcuts-visible .kbd-hint {
+  display: inline-block;
 }
 
 /* ==================== 画像情報 & 推奨モザイクサイズカード ==================== */
@@ -660,7 +664,8 @@ body {
   gap: 6px;
 }
 
-.btn.compare-active {
+.btn.compare-active,
+.btn.shortcuts-toggle-active {
   background: rgba(0, 212, 255, 0.24);
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
@@ -886,6 +891,7 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  /* ブラウザ標準のタッチスクロールやページズームと競合しないよう無効化 (2本指ピンチズーム用) */
   touch-action: none;
 }
 
@@ -966,18 +972,25 @@ body {
   justify-content: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 20px;
+  /* 初期状態 (.shortcut-grid 非表示時) で下部余白が不自然に広がらないよう余白なし */
+  margin-bottom: 0;
 }
 
+/* 開始画面内のショートカット一覧グリッド (初期状態は非表示、body.shortcuts-visible 時にのみ表示) */
 .shortcut-grid {
-  display: grid;
+  display: none;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+  margin-top: 20px;
   text-align: left;
   background-color: rgba(13, 13, 15, 0.65);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
+}
+
+body.shortcuts-visible .shortcut-grid {
+  display: grid;
 }
 
 .sc-item {
@@ -1030,19 +1043,23 @@ body {
   color: var(--accent-cyan);
 }
 
-/* 下部ショートカットフッターバー */
+/* 下部ショートカットフッターバー (初期状態は非表示で高さを詰め、body.shortcuts-visible 時にのみ表示) */
 .shortcut-bar {
+  display: none;
   min-height: 30px;
   padding: 4px 14px;
   background-color: var(--bg-panel);
   border-top: 1px solid var(--border-color);
-  display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
   font-size: 11.5px;
   color: var(--text-sub);
   z-index: 10;
+}
+
+body.shortcuts-visible .shortcut-bar {
+  display: flex;
 }
 
 /* ==================== トースト通知 ==================== */
