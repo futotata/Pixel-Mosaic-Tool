@@ -28,15 +28,8 @@
     <!-- ==================== 左ツールパネル (幅 300〜320px) ==================== -->
     <aside class="tool-panel" aria-label="モザイク編集ツールパネル">
 
-      <!-- アプリヘッダー -->
+      <!-- アプリヘッダー (PWAインストールボタン表示時のみ現れる) -->
       <header class="panel-header">
-        <div class="brand-row">
-          <img src="./icons/icon-192.png" alt="Pixel Mosaic Tool アイコン" class="brand-icon" width="32" height="32">
-          <div class="brand-text">
-            <h1 class="app-title">Pixel Mosaic Tool</h1>
-            <span class="app-subtitle">本格ピクセルモザイク PWA</span>
-          </div>
-        </div>
         <!-- PWAインストール可能時に表示されるボタン -->
         <button type="button" id="installPwaBtn" class="btn btn-install" hidden aria-label="PWAアプリとしてインストール">
           PWAインストール
@@ -110,9 +103,51 @@
           </div>
         </section>
 
-        <!-- 2. ツール切替 (ブラシ / 矩形選択 / パン移動) -->
+        <!-- 2. モザイクサイズ設定 -->
+        <section class="panel-section" aria-labelledby="sectionSizeHeading">
+          <h2 id="sectionSizeHeading" class="section-title">2. モザイクサイズ</h2>
+
+          <!-- モザイクサイズ (1〜200px, 1px単位, スライダー+数値連動) -->
+          <div class="control-group">
+            <div class="control-header">
+              <label for="mosaicSizeSlider" class="control-label">モザイクサイズ (1〜200px)</label>
+              <div class="number-input-wrap">
+                <label for="mosaicSizeInput" class="sr-only">モザイクサイズ数値入力</label>
+                <input
+                  type="number"
+                  id="mosaicSizeInput"
+                  class="number-input"
+                  min="1"
+                  max="200"
+                  step="1"
+                  value="16"
+                  aria-label="モザイクサイズ数値入力 (1から200ピクセル)"
+                >
+                <span class="unit-label">px</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              id="mosaicSizeSlider"
+              class="range-slider"
+              min="1"
+              max="200"
+              step="1"
+              value="16"
+              aria-label="モザイクサイズスライダー (1から200ピクセル)"
+            >
+            <div class="range-ticks">
+              <span>1px (極小)</span>
+              <span>50px</span>
+              <span>100px</span>
+              <span>200px (極大)</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. ツール切替 (ブラシ / 矩形選択 / パン移動) -->
         <section class="panel-section" aria-labelledby="sectionToolHeading">
-          <h2 id="sectionToolHeading" class="section-title">2. 適用ツール切替</h2>
+          <h2 id="sectionToolHeading" class="section-title">3. 適用ツール切替</h2>
 
           <div class="tool-switcher" role="group" aria-label="モザイク適用ツール選択">
             <button
@@ -183,85 +218,6 @@
               >
                 解除 <kbd class="kbd-hint">Esc</kbd>
               </button>
-            </div>
-          </div>
-        </section>
-
-        <!-- 3. モザイクサイズ & ブラシサイズ設定 -->
-        <section class="panel-section" aria-labelledby="sectionSizeHeading">
-          <h2 id="sectionSizeHeading" class="section-title">3. サイズ調整</h2>
-
-          <!-- モザイクサイズ (1〜200px, 1px単位, スライダー+数値連動) -->
-          <div class="control-group">
-            <div class="control-header">
-              <label for="mosaicSizeSlider" class="control-label">モザイクサイズ (1〜200px)</label>
-              <div class="number-input-wrap">
-                <label for="mosaicSizeInput" class="sr-only">モザイクサイズ数値入力</label>
-                <input
-                  type="number"
-                  id="mosaicSizeInput"
-                  class="number-input"
-                  min="1"
-                  max="200"
-                  step="1"
-                  value="16"
-                  aria-label="モザイクサイズ数値入力 (1から200ピクセル)"
-                >
-                <span class="unit-label">px</span>
-              </div>
-            </div>
-            <input
-              type="range"
-              id="mosaicSizeSlider"
-              class="range-slider"
-              min="1"
-              max="200"
-              step="1"
-              value="16"
-              aria-label="モザイクサイズスライダー (1から200ピクセル)"
-            >
-            <div class="range-ticks">
-              <span>1px (極小)</span>
-              <span>50px</span>
-              <span>100px</span>
-              <span>200px (極大)</span>
-            </div>
-          </div>
-
-          <!-- ブラシサイズ (円形プレビュー直径, スライダー+数値連動) -->
-          <div id="brushControlGroup" class="control-group">
-            <div class="control-header">
-              <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>
-              <div class="number-input-wrap">
-                <label for="brushSizeInput" class="sr-only">ブラシサイズ数値入力</label>
-                <input
-                  type="number"
-                  id="brushSizeInput"
-                  class="number-input"
-                  min="4"
-                  max="400"
-                  step="1"
-                  value="64"
-                  aria-label="ブラシサイズ数値入力 (4から400ピクセル)"
-                >
-                <span class="unit-label">px</span>
-              </div>
-            </div>
-            <input
-              type="range"
-              id="brushSizeSlider"
-              class="range-slider range-slider-cyan"
-              min="4"
-              max="400"
-              step="1"
-              value="64"
-              aria-label="ブラシサイズスライダー (4から400ピクセル)"
-            >
-            <div class="range-ticks">
-              <span>4px (細)</span>
-              <span>100px</span>
-              <span>200px</span>
-              <span>400px (太)</span>
             </div>
           </div>
         </section>
@@ -479,6 +435,43 @@
           </div>
         </div>
 
+      </div>
+
+      <!-- 下部ブラシサイズ調節バー (円形プレビュー直径, スライダー+数値連動) -->
+      <div id="brushControlGroup" class="control-group brush-size-bar">
+        <div class="control-header">
+          <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>
+          <div class="number-input-wrap">
+            <label for="brushSizeInput" class="sr-only">ブラシサイズ数値入力</label>
+            <input
+              type="number"
+              id="brushSizeInput"
+              class="number-input"
+              min="4"
+              max="400"
+              step="1"
+              value="64"
+              aria-label="ブラシサイズ数値入力 (4から400ピクセル)"
+            >
+            <span class="unit-label">px</span>
+          </div>
+        </div>
+        <input
+          type="range"
+          id="brushSizeSlider"
+          class="range-slider range-slider-cyan"
+          min="4"
+          max="400"
+          step="1"
+          value="64"
+          aria-label="ブラシサイズスライダー (4から400ピクセル)"
+        >
+        <div class="range-ticks">
+          <span>4px (細)</span>
+          <span>100px</span>
+          <span>200px</span>
+          <span>400px (太)</span>
+        </div>
       </div>
 
       <!-- 下部ショートカット・操作ガイドフッター (初期状態は非表示、body.shortcuts-visible 時に表示) -->

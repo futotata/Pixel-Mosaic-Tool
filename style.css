@@ -117,31 +117,9 @@ body {
   background: linear-gradient(180deg, rgba(123, 92, 255, 0.08) 0%, rgba(22, 22, 26, 0) 100%);
 }
 
-.brand-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(123, 92, 255, 0.35);
-}
-
-.app-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-main);
-  letter-spacing: 0.02em;
-  line-height: 1.2;
-}
-
-.app-subtitle {
-  font-size: 11px;
-  color: var(--accent-cyan);
-  display: block;
+/* インストールボタンが非表示の間はヘッダー自体を表示しない */
+.panel-header:has(> #installPwaBtn[hidden]) {
+  display: none;
 }
 
 /* パネル内アラート領域 */
@@ -1069,6 +1047,21 @@ body.shortcuts-visible .shortcut-grid {
   font-size: 16px;
   font-weight: 700;
   color: var(--accent-cyan);
+}
+
+/* 下部ブラシサイズ調節フッターバー */
+.brush-size-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 8px 14px;
+  background-color: var(--bg-panel);
+  border: none;
+  border-top: 1px solid var(--border-color);
+  border-radius: 0;
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 /* 下部ショートカットフッターバー (初期状態は非表示で高さを詰め、body.shortcuts-visible 時にのみ表示) */
