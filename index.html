@@ -396,6 +396,29 @@
         >
           💾 名前を付けて保存
         </button>
+
+        <!-- ショートカットキー一覧（全画面オーバーレイ）表示ボタン -->
+        <button
+          type="button"
+          id="shortcutHelpBtn"
+          class="btn btn-secondary"
+          aria-haspopup="dialog"
+          aria-controls="shortcutHelpOverlay"
+          aria-label="ショートカットキー一覧を表示する"
+        >
+          ⌨️ ショートカット
+        </button>
+
+        <!-- 編集中の画像を閉じて開始画面に戻るボタン -->
+        <button
+          type="button"
+          id="closeEditorBtn"
+          class="btn btn-close-editor"
+          disabled
+          aria-label="画像を閉じて開始画面に戻る"
+        >
+          ✕ 閉じる
+        </button>
       </header>
 
       <!-- キャンバスビューポート (チェッカーボード背景) -->
@@ -536,6 +559,89 @@
 
     </main>
 
+  </div>
+
+  <!-- ショートカットキー一覧 全画面オーバーレイ (表示中は編集画面全体を完全に覆い隠す) -->
+  <div
+    id="shortcutHelpOverlay"
+    class="shortcut-help-overlay"
+    hidden
+    role="dialog"
+    aria-modal="true"
+    aria-label="ショートカットキー一覧"
+  >
+    <div class="shortcut-help-dialog" role="document">
+      <div class="shortcut-help-header">
+        <h2 class="shortcut-help-title">ショートカットキー一覧</h2>
+        <button
+          type="button"
+          id="shortcutHelpCloseBtn"
+          class="btn btn-secondary shortcut-help-close-btn"
+          aria-label="ショートカットキー一覧を閉じる"
+        >
+          ✕ 閉じる
+        </button>
+      </div>
+
+      <p class="shortcut-help-lead">
+        キーボードショートカット・マウス操作・タッチ操作の一覧です。<kbd>Esc</kbd> キーまたは枠外クリックでも閉じられます。
+      </p>
+
+      <div class="shortcut-help-list">
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>B</kbd></div>
+          <div class="shortcut-help-desc">ブラシ（モザイク塗布モードに切り替え）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>E</kbd></div>
+          <div class="shortcut-help-desc">消しゴム（モザイク消去モードに切り替え）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>R</kbd></div>
+          <div class="shortcut-help-desc">矩形選択ツールに切り替え</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Enter</kbd> <span class="key-sep">/</span> <kbd>ダブルクリック</kbd></div>
+          <div class="shortcut-help-desc">矩形選択のモザイクを確定適用</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Esc</kbd></div>
+          <div class="shortcut-help-desc">矩形選択のキャンセル ／ この一覧画面を閉じる</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Ctrl+Z</kbd></div>
+          <div class="shortcut-help-desc">元に戻す（Undo）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Ctrl+Y</kbd> <span class="key-sep">/</span> <kbd>Ctrl+Shift+Z</kbd></div>
+          <div class="shortcut-help-desc">やり直す（Redo）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>H</kbd></div>
+          <div class="shortcut-help-desc">原画比較（押している間だけモザイク前の原画を表示）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Space</kbd>+ドラッグ <span class="key-sep">/</span> <kbd>中ボタン</kbd>ドラッグ</div>
+          <div class="shortcut-help-desc">画面移動（パン移動）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>2本指ピンチ</kbd> <span class="key-sep">/</span> <kbd>2本指ドラッグ</kbd></div>
+          <div class="shortcut-help-desc">タッチ操作でズーム（拡大・縮小）・画面移動</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>＋</kbd> <kbd>－</kbd> <kbd>0</kbd> <span class="key-sep">/</span> <kbd>ホイール</kbd></div>
+          <div class="shortcut-help-desc">ズーム拡大・縮小 ／ <kbd>0</kbd> で 100% 等倍にリセット</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Ctrl+S</kbd></div>
+          <div class="shortcut-help-desc">編集済み画像を保存（<code>_mosaic</code>）</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>Ctrl+O</kbd></div>
+          <div class="shortcut-help-desc">画像ファイルを開く</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 画面内トースト通知コンテナ -->

@@ -137,6 +137,8 @@
     // 各要素は { type: 'imagedata' | 'dataurl', data: ImageData | string }
     historyStack: [],
     historyIndex: -1,
+    // 履歴上限超過により初期スナップショットがシフト破棄されたかどうか
+    historyTrimmed: false,
 
     // Screen Wake Lock API の Sentinel オブジェクト
     wakeLockSentinel: null,
@@ -227,7 +229,7 @@
     brushModeBtn: document.getElementById('brushModeBtn'),
     eraserModeBtn: document.getElementById('eraserModeBtn'),
 
-    // 履歴・比較・保存
+    // 履歴・比較・保存・閉じる
     undoBtn: document.getElementById('undoBtn'),
     redoBtn: document.getElementById('redoBtn'),
     undoToolbarBtn: document.getElementById('undoToolbarBtn'),
@@ -237,6 +239,12 @@
     compareToggleBtn: document.getElementById('compareToggleBtn'),
     saveBtn: document.getElementById('saveBtn'),
     saveAsBtn: document.getElementById('saveAsBtn'),
+    closeEditorBtn: document.getElementById('closeEditorBtn'),
+
+    // ショートカット一覧オーバーレイ
+    shortcutHelpBtn: document.getElementById('shortcutHelpBtn'),
+    shortcutHelpOverlay: document.getElementById('shortcutHelpOverlay'),
+    shortcutHelpCloseBtn: document.getElementById('shortcutHelpCloseBtn'),
 
     // Wake Lock & 別ウィンドウ & ショートカット説明表示トグル
     wakeLockToggle: document.getElementById('wakeLockToggle'),
@@ -953,6 +961,7 @@
   function initHistoryStack() {
     state.historyStack = [createCanvasSnapshot()];
     state.historyIndex = 0;
+    state.historyTrimmed = false;
     updateHistoryUI();
   }
 
@@ -971,6 +980,7 @@
     // 最大ステップ数を超えたら先頭を削除
     if (state.historyStack.length > MAX_HISTORY_STEPS + 1) {
       state.historyStack.shift();
+      state.historyTrimmed = true;
     }
 
     state.historyIndex = state.historyStack.length - 1;
@@ -1622,6 +1632,7 @@
     dom.emptyStateBox.hidden = true;
     dom.saveBtn.disabled = false;
     dom.saveAsBtn.disabled = false;
+    dom.closeEditorBtn.disabled = false;
     dom.compareHoldBtn.disabled = false;
     dom.compareToggleBtn.disabled = false;
 
@@ -1972,6 +1983,145 @@
     }
   }
 
+  /**
+   * 編集中の画像を閉じてアプリ起動直後の開始画面（未読み込み状態）に戻します。
+   * - モザイク編集の履歴が残っている場合は confirm() で確認し、キャンセル時は何もしません。
+   * - 設定類（モザイクサイズ、ブラシサイズ、選択中ツール、ブラシ／消しゴムモード、ショートカット説明の表示設定、Wake Lock）は維持します。
+   */
+  function closeCurrentImage() {
+    if (!state.hasImage) {
+      return;
+    }
+
+    // モザイク編集の履歴が残っている場合は確認ダイアログを表示
+    const hasEditHistory = state.historyIndex > 0 || state.historyTrimmed;
+    if (hasEditHistory) {
+      const confirmed = window.confirm('編集中の画像を閉じますか？保存していないモザイク編集は失われます。');
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    // 1. 進行中の操作（ブラシ／消しゴムのストローク、矩形選択、パン、ピンチ、原画比較の保持・固定）を安全に解除・破棄
+    for (const pointerId of state.activePointers.keys()) {
+      if (dom.displayCanvas.hasPointerCapture(pointerId)) {
+        try {
+          dom.displayCanvas.releasePointerCapture(pointerId);
+        } catch (_) {
+          // キャプチャ解放失敗時は無視
+        }
+      }
+    }
+    state.activePointers.clear();
+    state.isPinching = false;
+    state.ignoreSinglePointerUntilAllReleased = false;
+    state.pinchStartDist = 0;
+    state.pinchStartZoom = 1.0;
+    state.pinchPrevMidVx = 0;
+    state.pinchPrevMidVy = 0;
+
+    state.isPanning = false;
+    state.panStartClientX = 0;
+    state.panStartClientY = 0;
+    state.panOriginX = 0;
+    state.panOriginY = 0;
+    state.isSpacePressed = false;
+
+    state.isBrushing = false;
+    state.lastBrushImageX = 0;
+    state.lastBrushImageY = 0;
+    state.brushGridCols = 0;
+    state.brushGridRows = 0;
+    state.brushVisitedCells = null;
+    state.brushPaintedCells = null;
+    state.brushTouchedAny = false;
+
+    state.isErasing = false;
+    state.eraserTouchedAny = false;
+    state.eraserPreStrokeSnapshot = null;
+
+    state.rectSelection = null;
+    state.rectDragMode = null;
+    state.rectDragStartImgX = 0;
+    state.rectDragStartImgY = 0;
+    state.rectInitialBox = null;
+
+    state.isCompareHold = false;
+    state.isCompareToggle = false;
+
+    // 2. 画像読み込み状態およびファイル情報を初期値へクリア
+    state.hasImage = false;
+    state.imageWidth = 0;
+    state.imageHeight = 0;
+    state.baseFileName = 'image';
+    state.originalExt = '.png';
+    state.mimeType = 'image/png';
+    state.recommendedMosaicSize = 4;
+
+    state.cursorInCanvas = false;
+    state.cursorViewportX = 0;
+    state.cursorViewportY = 0;
+    state.cursorImageX = 0;
+    state.cursorImageY = 0;
+
+    // 3. 4つのオフスクリーンキャンバス（original / mosaic / work / preview）の内容をクリア
+    for (const [canvas, ctx] of [
+      [originalCanvas, originalCtx],
+      [mosaicCanvas, mosaicCtx],
+      [workCanvas, workCtx],
+      [previewCanvas, previewCtx]
+    ]) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+
+    // 4. 履歴スタックを空にして Undo/Redo ボタン（パネル側・ツールバー側とも）を無効化
+    state.historyStack = [];
+    state.historyIndex = -1;
+    state.historyTrimmed = false;
+    updateHistoryUI();
+
+    // 5. 矩形選択UIの解除
+    updateRectActionUI();
+    dom.floatingRectText.textContent = '矩形選択プレビュー中';
+
+    // 6. ズームと表示オフセットを初期値に戻す
+    state.zoom = 1.0;
+    state.panX = 0;
+    state.panY = 0;
+    updateZoomUI();
+
+    // 7. ステータス表示（ツールバッジ・座標・比較バッジ）を初期表示に戻す
+    updateStatusToolBadge();
+    dom.statusCoords.textContent = 'X: - , Y: -';
+    updateCompareButtonUI();
+
+    // 8. 左パネルの画像情報カードと推奨モザイクサイズ表示を初期のプレースホルダに戻す
+    dom.infoFileName.textContent = '未選択';
+    dom.infoFileName.title = '未選択';
+    dom.infoResolution.textContent = '- × - px';
+    dom.infoLongSide.textContent = '- px';
+    dom.infoRecommendedSize.innerHTML = '4 px <small>(最小4px)</small>';
+    dom.recommendedBtnValue.textContent = '4';
+
+    // 9. 保存／名前を付けて保存／閉じる／比較ボタンを無効化する
+    dom.saveBtn.disabled = true;
+    dom.saveAsBtn.disabled = true;
+    dom.closeEditorBtn.disabled = true;
+    dom.compareHoldBtn.disabled = true;
+    dom.compareToggleBtn.disabled = true;
+
+    // 10. ファイル入力（input[type=file]）の値をリセットし、同じファイルを再び選択できるようにする
+    dom.fileInput.value = '';
+
+    // 11. パネルアラートを閉じ、開始画面（emptyStateBox）を再表示して表示キャンバスを空に再描画
+    hidePanelAlert();
+    dom.emptyStateBox.hidden = false;
+    updateCanvasCursorStyle();
+    renderDisplayCanvas();
+  }
+
   /* =========================================================================
    * 13. 原画比較 (Before / After) 制御
    * ========================================================================= */
@@ -2120,6 +2270,42 @@
    */
   function toggleShortcutsVisible() {
     setShortcutsVisible(!state.shortcutsVisible);
+  }
+
+  /**
+   * ショートカットキー一覧の全画面オーバーレイ (`#shortcutHelpOverlay`) を開きます。
+   */
+  function openShortcutHelp() {
+    if (!dom.shortcutHelpOverlay) {
+      return;
+    }
+    // キー押下保持系の一時状態（Hキー原画比較・Space一時パン）があれば安全に解除
+    if (state.isCompareHold) {
+      setCompareHold(false);
+    }
+    if (state.isSpacePressed) {
+      state.isSpacePressed = false;
+      updateCanvasCursorStyle();
+      renderDisplayCanvas();
+    }
+
+    dom.shortcutHelpOverlay.hidden = false;
+    if (dom.shortcutHelpCloseBtn) {
+      dom.shortcutHelpCloseBtn.focus({ preventScroll: true });
+    }
+  }
+
+  /**
+   * ショートカットキー一覧の全画面オーバーレイ (`#shortcutHelpOverlay`) を閉じます。
+   */
+  function closeShortcutHelp() {
+    if (!dom.shortcutHelpOverlay || dom.shortcutHelpOverlay.hidden) {
+      return;
+    }
+    dom.shortcutHelpOverlay.hidden = true;
+    if (dom.shortcutHelpBtn) {
+      dom.shortcutHelpBtn.focus({ preventScroll: true });
+    }
   }
 
   /* =========================================================================
@@ -2727,9 +2913,19 @@
     });
     dom.compareToggleBtn.addEventListener('click', toggleCompareFixed);
 
-    // 保存ボタン & 名前を付けて保存ボタン
+    // 保存ボタン & 名前を付けて保存ボタン & 画像を閉じるボタン
     dom.saveBtn.addEventListener('click', () => saveEditedImage());
     dom.saveAsBtn.addEventListener('click', saveEditedImageAs);
+    dom.closeEditorBtn.addEventListener('click', closeCurrentImage);
+
+    // ショートカットキー一覧（全画面オーバーレイ）の開閉ボタンと背景クリック
+    dom.shortcutHelpBtn.addEventListener('click', openShortcutHelp);
+    dom.shortcutHelpCloseBtn.addEventListener('click', closeShortcutHelp);
+    dom.shortcutHelpOverlay.addEventListener('click', (e) => {
+      if (e.target === dom.shortcutHelpOverlay) {
+        closeShortcutHelp();
+      }
+    });
 
     // Wake Lock トグル & 別ウィンドウ起動
     dom.wakeLockToggle.addEventListener('change', (e) => {
@@ -2798,6 +2994,9 @@
     // ドラッグ＆ドロップによる画像読み込み
     let dragEnterCount = 0;
     window.addEventListener('dragenter', (e) => {
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        return;
+      }
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
         e.preventDefault();
         dragEnterCount++;
@@ -2805,12 +3004,18 @@
       }
     });
     window.addEventListener('dragover', (e) => {
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        return;
+      }
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
       }
     });
     window.addEventListener('dragleave', (e) => {
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        return;
+      }
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
         dragEnterCount = Math.max(0, dragEnterCount - 1);
         if (dragEnterCount === 0) {
@@ -2822,6 +3027,9 @@
       e.preventDefault();
       dragEnterCount = 0;
       dom.dropOverlay.hidden = true;
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        return;
+      }
       const files = e.dataTransfer && e.dataTransfer.files;
       if (files && files.length > 0) {
         loadImageFromFile(files[0]);
@@ -2833,8 +3041,21 @@
       resizeDisplayCanvas();
     });
 
-    // キーボードショートカット (B, R, Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y, Ctrl+S, Ctrl+O, H, +/-/0, Enter, Esc, Space)
+    // キーボードショートカット (B, E, R, Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y, Ctrl+S, Ctrl+O, H, +/-/0, Enter, Esc, Space)
     window.addEventListener('keydown', (e) => {
+      // ショートカット一覧オーバーレイ表示中は Escape（閉じる）のみ処理し、それ以外のキーは無視する
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeShortcutHelp();
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && ['s', 'o', 'z', 'y'].includes(e.key.toLowerCase())) {
+          e.preventDefault();
+        }
+        return;
+      }
+
       const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
       const isInputFocused = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select';
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
@@ -2930,6 +3151,9 @@
     });
 
     window.addEventListener('keyup', (e) => {
+      if (dom.shortcutHelpOverlay && !dom.shortcutHelpOverlay.hidden) {
+        return;
+      }
       const lowerKey = e.key.toLowerCase();
       if (lowerKey === 'h') {
         setCompareHold(false);
