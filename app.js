@@ -25,6 +25,10 @@
   const MIN_ZOOM = 0.1;
   const MAX_ZOOM = 8.0;
 
+  /** 2本指ツイスト回転のスナップ単位 (90° = π/2 rad) とスナップ吸着許容角 (±3°) */
+  const ROTATION_SNAP_STEP_RAD = Math.PI / 2;
+  const ROTATION_SNAP_THRESHOLD_RAD = (3 * Math.PI) / 180;
+
   /**
    * Undo/Redo 履歴の最大保持ステップ数
    * 仕様要件: 「最低20段階 (スタック上限30以上)」を満たすため35段階 (初期状態含め36要素) に設定
@@ -67,10 +71,11 @@
     // ブラシツールのサブモード ('brush' | 'eraser')
     brushMode: 'brush',
 
-    // ビューポート上のズーム倍率 (0.1〜8.0) とパンオフセット (画面px)
+    // ビューポート上のズーム倍率 (0.1〜8.0)、パンオフセット (画面px)、表示回転角 (ラジアン, −π〜π)
     zoom: 1.0,
     panX: 0,
     panY: 0,
+    rotation: 0,
 
     // スペースキー押下中フラグ (一時的なパン移動モード)
     isSpacePressed: false,
@@ -129,9 +134,12 @@
     // ピンチ開始時の2本指間の距離 (px) と開始時ズーム倍率
     pinchStartDist: 0,
     pinchStartZoom: 1.0,
-    // 直前フレームにおける2本指の中点座標 (ビューポートCSS座標系)
+    // 直前フレームにおける2本指の距離・中点座標 (ビューポートCSS座標系)・角度・スナップ前累積回転角
+    pinchPrevDist: 0,
     pinchPrevMidVx: 0,
     pinchPrevMidVy: 0,
+    pinchPrevAngle: 0,
+    pinchRawRotation: 0,
 
     // Undo / Redo 履歴スタック
     // 各要素は { type: 'imagedata' | 'dataurl', data: ImageData | string }
@@ -1060,24 +1068,143 @@
   }
 
   /**
+   * 角度（ラジアン）を −π〜π (−180°〜180°) の範囲に正規化します。
+   * @param {number} rad ラジアン角
+   * @returns {number}
+   */
+  function normalizeAngleRad(rad) {
+    if (!Number.isFinite(rad)) {
+      return 0;
+    }
+    let a = rad % (Math.PI * 2);
+    if (a > Math.PI) {
+      a -= Math.PI * 2;
+    } else if (a <= -Math.PI) {
+      a += Math.PI * 2;
+    }
+    return a === 0 ? 0 : a;
+  }
+
+  /**
+   * 累積回転角（ラジアン）が 90° の倍数から ±3° 以内に入った場合はその倍数角に吸着させ、
+   * −180°〜180° (−π〜π) の範囲に正規化して返します。
+   * @param {number} rad 累積回転角（ラジアン）
+   * @returns {number}
+   */
+  function snapRotationAngle(rad) {
+    const normalized = normalizeAngleRad(rad);
+    const nearestMultiple = Math.round(normalized / ROTATION_SNAP_STEP_RAD) * ROTATION_SNAP_STEP_RAD;
+    const diff = normalizeAngleRad(normalized - nearestMultiple);
+    if (Math.abs(diff) <= ROTATION_SNAP_THRESHOLD_RAD + 1e-9) {
+      return normalizeAngleRad(nearestMultiple);
+    }
+    return normalized;
+  }
+
+  /**
+   * 単一表示変換の逆変換（画面→画像）:
+   * img = R(−θ) × ((画面 − pan) / zoom)
+   *
+   * @param {number} vx ビューポート左上基準のX座標 (CSS px)
+   * @param {number} vy ビューポート左上基準のY座標 (CSS px)
+   * @returns {{ ix: number, iy: number }} 画像座標 (px)
+   */
+  function viewportToImageCoords(vx, vy) {
+    const dx = (vx - state.panX) / state.zoom;
+    const dy = (vy - state.panY) / state.zoom;
+    if (state.rotation === 0) {
+      return { ix: dx, iy: dy };
+    }
+    const cos = Math.cos(state.rotation);
+    const sin = Math.sin(state.rotation);
+    return {
+      ix: dx * cos + dy * sin,
+      iy: -dx * sin + dy * cos
+    };
+  }
+
+  /**
+   * 単一表示変換の順変換（画像→画面）:
+   * 画面座標 = pan + R(θ) × (画像座標 × zoom)
+   *
+   * @param {number} ix 画像X座標 (px)
+   * @param {number} iy 画像Y座標 (px)
+   * @returns {{ vx: number, vy: number }} ビューポート左上基準の座標 (CSS px)
+   */
+  function imageToViewportCoords(ix, iy) {
+    const sx = ix * state.zoom;
+    const sy = iy * state.zoom;
+    if (state.rotation === 0) {
+      return {
+        vx: state.panX + sx,
+        vy: state.panY + sy
+      };
+    }
+    const cos = Math.cos(state.rotation);
+    const sin = Math.sin(state.rotation);
+    return {
+      vx: state.panX + sx * cos - sy * sin,
+      vy: state.panY + sx * sin + sy * cos
+    };
+  }
+
+  /**
+   * 2Dコンテキストに単一の表示変換 translate(panX, panY) → rotate(θ) → scale(zoom, zoom) を適用します。
+   * @param {CanvasRenderingContext2D} ctx
+   */
+  function applyDisplayTransformToContext(ctx) {
+    ctx.translate(state.panX, state.panY);
+    ctx.rotate(state.rotation);
+    ctx.scale(state.zoom, state.zoom);
+  }
+
+  /**
+   * 現在の zoom および rotation のもとで、画像上のアンカー点 (anchorIx, anchorIy) が
+   * ビューポート座標 (anchorVx, anchorVy) の直下に留まるよう panX / panY を補正します。
+   * @param {number} anchorVx アンカーのビューポートX座標
+   * @param {number} anchorVy アンカーのビューポートY座標
+   * @param {number} anchorIx アンカーの画像X座標
+   * @param {number} anchorIy アンカーの画像Y座標
+   */
+  function updatePanForAnchor(anchorVx, anchorVy, anchorIx, anchorIy) {
+    const sx = anchorIx * state.zoom;
+    const sy = anchorIy * state.zoom;
+    const cos = Math.cos(state.rotation);
+    const sin = Math.sin(state.rotation);
+    state.panX = anchorVx - (sx * cos - sy * sin);
+    state.panY = anchorVy - (sx * sin + sy * cos);
+  }
+
+  /**
+   * キャンバス内にカーソルがある場合、現在のビューポート座標から画像座標を再計算して同期します。
+   */
+  function syncCursorImageFromViewport() {
+    if (!state.cursorInCanvas) {
+      return;
+    }
+    const { ix, iy } = viewportToImageCoords(state.cursorViewportX, state.cursorViewportY);
+    state.cursorImageX = ix;
+    state.cursorImageY = iy;
+  }
+
+  /**
    * ビューポート内のクライアント座標 (clientX, clientY) を
    * ビューポート左上基準のCSSピクセル座標と画像ピクセル座標に変換します。
    *
-   * @param {number} clientX マウスイベントのclientX
-   * @param {number} clientY マウスイベントのclientY
+   * @param {number} clientX マウス・ポインタイベントのclientX
+   * @param {number} clientY マウス・ポインタイベントのclientY
    * @returns {{ vx: number, vy: number, ix: number, iy: number }}
    */
   function clientToImageCoords(clientX, clientY) {
     const rect = dom.canvasViewport.getBoundingClientRect();
     const vx = clientX - rect.left;
     const vy = clientY - rect.top;
-    const ix = (vx - state.panX) / state.zoom;
-    const iy = (vy - state.panY) / state.zoom;
+    const { ix, iy } = viewportToImageCoords(vx, vy);
     return { vx, vy, ix, iy };
   }
 
   /**
-   * 画像全体がビューポート中央に収まるようにズーム倍率とパン位置を初期化（フィット）します。
+   * 画像全体がビューポート中央に収まるようにズーム倍率・パン位置・回転角を初期化（フィット）します。
    */
   function fitImageToViewport() {
     if (!state.hasImage) {
@@ -1093,10 +1220,13 @@
     // 最大でも等倍(1.0)を初期上限としつつ、0.1〜8.0に収める
     const fitZoom = Math.max(MIN_ZOOM, Math.min(1.0, Math.min(scaleX, scaleY)));
 
+    state.rotation = 0;
+    state.pinchRawRotation = 0;
     state.zoom = Number(fitZoom.toFixed(3));
     state.panX = Math.round((rect.width - state.imageWidth * state.zoom) / 2);
     state.panY = Math.round((rect.height - state.imageHeight * state.zoom) / 2);
 
+    syncCursorImageFromViewport();
     updateZoomUI();
     renderDisplayCanvas();
   }
@@ -1116,23 +1246,25 @@
     const cx = typeof centerVx === 'number' ? centerVx : rect.width / 2;
     const cy = typeof centerVy === 'number' ? centerVy : rect.height / 2;
 
-    // ズーム中心が指している画像上の座標を維持するようパンオフセットを再計算
-    const imgXBefore = (cx - state.panX) / state.zoom;
-    const imgYBefore = (cy - state.panY) / state.zoom;
+    // ズーム中心が指している画像上の座標を維持するようパンオフセットを回転込みで再計算
+    const { ix: imgXBefore, iy: imgYBefore } = viewportToImageCoords(cx, cy);
 
     state.zoom = Number(clampedZoom.toFixed(3));
-    state.panX = cx - imgXBefore * state.zoom;
-    state.panY = cy - imgYBefore * state.zoom;
+    updatePanForAnchor(cx, cy, imgXBefore, imgYBefore);
 
+    syncCursorImageFromViewport();
     updateZoomUI();
     renderDisplayCanvas();
   }
 
   /**
-   * ズーム倍率表示ラベルを更新します。
+   * ズーム倍率表示ラベルを更新します。回転が 0 でないときは角度も併記します（例: 100% ・ 35°）。
    */
   function updateZoomUI() {
-    dom.zoomLevelText.textContent = `${Math.round(state.zoom * 100)}%`;
+    const zoomPercent = `${Math.round(state.zoom * 100)}%`;
+    const rawDeg = Math.round((state.rotation * 180) / Math.PI);
+    const deg = rawDeg === 0 ? 0 : rawDeg;
+    dom.zoomLevelText.textContent = deg !== 0 ? `${zoomPercent} ・ ${deg}°` : zoomPercent;
   }
 
   /**
@@ -1170,10 +1302,9 @@
       sourceCanvas = previewCanvas;
     }
 
-    // 画像描画設定（拡大表示時はピクセルの境界がくっきり見えるようスムージングを無効化）
+    // 画像描画設定: translate(panX, panY) → rotate(θ) → scale(zoom, zoom) の単一変換を適用
     displayCtx.save();
-    displayCtx.translate(state.panX, state.panY);
-    displayCtx.scale(state.zoom, state.zoom);
+    applyDisplayTransformToContext(displayCtx);
     displayCtx.imageSmoothingEnabled = state.zoom < 1.25;
 
     // 画像外周のドロップシャドウと境界線
@@ -1208,13 +1339,13 @@
   }
 
   /**
-   * ブラシツール選択時に、マウスカーソル位置に円形プレビューとモザイクセルガイドを描画します。
+   * ブラシツール選択時に、マウス・タッチカーソル位置に円形プレビューを描画します。
+   * 中心位置は逆変換で得た画像座標 (cursorImageX, cursorImageY) を順変換して追従させます。
    * @param {CanvasRenderingContext2D} ctx
    */
   function drawBrushCursorPreview(ctx) {
     const screenRadius = (state.brushSize * state.zoom) / 2;
-    const vx = state.cursorViewportX;
-    const vy = state.cursorViewportY;
+    const { vx, vy } = imageToViewportCoords(state.cursorImageX, state.cursorImageY);
 
     ctx.save();
 
@@ -1248,7 +1379,7 @@
   }
 
   /**
-   * 矩形選択中の破線枠および8方向のリサイズハンドルを描画します。
+   * 矩形選択中の破線枠および8方向のリサイズハンドルを、画像と同じ単一表示変換（画像座標系）の中で描画します。
    * @param {CanvasRenderingContext2D} ctx
    */
   function drawRectSelectionOverlay(ctx) {
@@ -1257,42 +1388,44 @@
       return;
     }
 
-    const sx = state.panX + sel.x * state.zoom;
-    const sy = state.panY + sel.y * state.zoom;
-    const sw = sel.w * state.zoom;
-    const sh = sel.h * state.zoom;
+    const x = sel.x;
+    const y = sel.y;
+    const w = sel.w;
+    const h = sel.h;
+    const invZoom = 1 / state.zoom;
 
     ctx.save();
+    applyDisplayTransformToContext(ctx);
 
     // 背景コントラスト用の黒枠
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.lineWidth = 2 * invZoom;
+    ctx.strokeRect(x, y, w, h);
 
     // シアン色の破線枠
     ctx.strokeStyle = '#00d4ff';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.lineWidth = 2 * invZoom;
+    ctx.setLineDash([6 * invZoom, 4 * invZoom]);
+    ctx.strokeRect(x, y, w, h);
     ctx.setLineDash([]);
 
-    // 四隅と上下左右の8つのリサイズハンドルを描画
-    const handleSize = 8;
+    // 四隅と上下左右の8つのリサイズハンドルを画像座標系で描画
+    const handleSize = 8 * invZoom;
     const half = handleSize / 2;
     const handlePoints = [
-      [sx, sy],
-      [sx + sw / 2, sy],
-      [sx + sw, sy],
-      [sx + sw, sy + sh / 2],
-      [sx + sw, sy + sh],
-      [sx + sw / 2, sy + sh],
-      [sx, sy + sh],
-      [sx, sy + sh / 2]
+      [x, y],
+      [x + w / 2, y],
+      [x + w, y],
+      [x + w, y + h / 2],
+      [x + w, y + h],
+      [x + w / 2, y + h],
+      [x, y + h],
+      [x, y + h / 2]
     ];
 
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#7b5cff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * invZoom;
     for (const [hx, hy] of handlePoints) {
       ctx.fillRect(hx - half, hy - half, handleSize, handleSize);
       ctx.strokeRect(hx - half, hy - half, handleSize, handleSize);
@@ -1302,7 +1435,8 @@
   }
 
   /**
-   * ビューポート座標 (vx, vy) が現在選択中の矩形のどのハンドルまたは内部にあるかを判定します。
+   * ビューポート座標 (vx, vy) を逆変換で画像座標系に変換し、
+   * 現在選択中の矩形のどのハンドルまたは内部にあるかを判定します。
    * @param {number} vx ビューポートX座標
    * @param {number} vy ビューポートY座標
    * @returns {string|null} ヒットした操作モード ('resize-nw' 等、内部なら 'move'、外部なら null)
@@ -1313,37 +1447,38 @@
       return null;
     }
 
-    const sx = state.panX + sel.x * state.zoom;
-    const sy = state.panY + sel.y * state.zoom;
-    const sw = sel.w * state.zoom;
-    const sh = sel.h * state.zoom;
-    const hitRadius = 8;
+    const { ix, iy } = viewportToImageCoords(vx, vy);
+    const x = sel.x;
+    const y = sel.y;
+    const w = sel.w;
+    const h = sel.h;
+    const hitRadius = 8 / state.zoom;
 
     const handles = [
-      { mode: 'resize-nw', x: sx, y: sy },
-      { mode: 'resize-ne', x: sx + sw, y: sy },
-      { mode: 'resize-se', x: sx + sw, y: sy + sh },
-      { mode: 'resize-sw', x: sx, y: sy + sh },
-      { mode: 'resize-n', x: sx + sw / 2, y: sy },
-      { mode: 'resize-e', x: sx + sw, y: sy + sh / 2 },
-      { mode: 'resize-s', x: sx + sw / 2, y: sy + sh },
-      { mode: 'resize-w', x: sx, y: sy + sh / 2 }
+      { mode: 'resize-nw', x, y },
+      { mode: 'resize-ne', x: x + w, y },
+      { mode: 'resize-se', x: x + w, y: y + h },
+      { mode: 'resize-sw', x, y: y + h },
+      { mode: 'resize-n', x: x + w / 2, y },
+      { mode: 'resize-e', x: x + w, y: y + h / 2 },
+      { mode: 'resize-s', x: x + w / 2, y: y + h },
+      { mode: 'resize-w', x, y: y + h / 2 }
     ];
 
-    for (const h of handles) {
-      if (Math.abs(vx - h.x) <= hitRadius && Math.abs(vy - h.y) <= hitRadius) {
-        return h.mode;
+    for (const handle of handles) {
+      if (Math.abs(ix - handle.x) <= hitRadius && Math.abs(iy - handle.y) <= hitRadius) {
+        return handle.mode;
       }
     }
 
-    if (vx >= sx && vx <= sx + sw && vy >= sy && vy <= sy + sh) {
+    if (ix >= x && ix <= x + w && iy >= y && iy <= y + h) {
       return 'move';
     }
     return null;
   }
 
   /**
-   * 現在のツールおよびマウス位置に応じてキャンバスのCSSカーソル形状を更新します。
+   * 現在のツール・回転角およびマウス位置に応じてキャンバスのCSSカーソル形状を更新します。
    */
   function updateCanvasCursorStyle() {
     if (!state.hasImage) {
@@ -1364,18 +1499,33 @@
     }
     if (state.currentTool === 'rect') {
       const hit = hitTestRectSelection(state.cursorViewportX, state.cursorViewportY);
-      const cursorMap = {
-        'resize-nw': 'nwse-resize',
-        'resize-se': 'nwse-resize',
-        'resize-ne': 'nesw-resize',
-        'resize-sw': 'nesw-resize',
-        'resize-n': 'ns-resize',
-        'resize-s': 'ns-resize',
-        'resize-e': 'ew-resize',
-        'resize-w': 'ew-resize',
-        'move': 'move'
+      if (!hit) {
+        dom.displayCanvas.style.cursor = 'crosshair';
+        return;
+      }
+      if (hit === 'move') {
+        dom.displayCanvas.style.cursor = 'move';
+        return;
+      }
+      const handleBaseDegMap = {
+        'resize-e': 0,
+        'resize-w': 0,
+        'resize-se': 45,
+        'resize-nw': 45,
+        'resize-s': 90,
+        'resize-n': 90,
+        'resize-sw': 135,
+        'resize-ne': 135
       };
-      dom.displayCanvas.style.cursor = cursorMap[hit] || 'crosshair';
+      const baseDeg = handleBaseDegMap[hit];
+      if (typeof baseDeg === 'number') {
+        const rotatedDeg = (((baseDeg + (state.rotation * 180) / Math.PI) % 180) + 180) % 180;
+        const sector = Math.round(rotatedDeg / 45) % 4;
+        const sectorCursors = ['ew-resize', 'nwse-resize', 'ns-resize', 'nesw-resize'];
+        dom.displayCanvas.style.cursor = sectorCursors[sector];
+      } else {
+        dom.displayCanvas.style.cursor = 'crosshair';
+      }
     }
   }
 
@@ -1590,6 +1740,14 @@
     state.activePointers.clear();
     state.isPinching = false;
     state.ignoreSinglePointerUntilAllReleased = false;
+    state.rotation = 0;
+    state.pinchStartDist = 0;
+    state.pinchStartZoom = 1.0;
+    state.pinchPrevDist = 0;
+    state.pinchPrevMidVx = 0;
+    state.pinchPrevMidVy = 0;
+    state.pinchPrevAngle = 0;
+    state.pinchRawRotation = 0;
     updateCompareButtonUI();
 
     // オフスクリーンキャンバス4面すべてを画像実寸に設定して初期化
@@ -2017,8 +2175,11 @@
     state.ignoreSinglePointerUntilAllReleased = false;
     state.pinchStartDist = 0;
     state.pinchStartZoom = 1.0;
+    state.pinchPrevDist = 0;
     state.pinchPrevMidVx = 0;
     state.pinchPrevMidVy = 0;
+    state.pinchPrevAngle = 0;
+    state.pinchRawRotation = 0;
 
     state.isPanning = false;
     state.panStartClientX = 0;
@@ -2086,10 +2247,11 @@
     updateRectActionUI();
     dom.floatingRectText.textContent = '矩形選択プレビュー中';
 
-    // 6. ズームと表示オフセットを初期値に戻す
+    // 6. ズーム・パン表示オフセット・回転角を初期値に戻す
     state.zoom = 1.0;
     state.panX = 0;
     state.panY = 0;
+    state.rotation = 0;
     updateZoomUI();
 
     // 7. ステータス表示（ツールバッジ・座標・比較バッジ）を初期表示に戻す
@@ -2381,9 +2543,10 @@
 
   /**
    * `state.activePointers` の先頭2本のポインタ座標から、
-   * 2本指の距離 (`dist`) とビューポート左上基準の中点 (`midVx`, `midVy`) を算出します。
+   * 2本指の距離 (`dist`)、2点を結ぶベクトルの角度 (`angle` ラジアン)、
+   * およびビューポート左上基準の中点 (`midVx`, `midVy`) を算出します。
    *
-   * @returns {{ dist: number, midVx: number, midVy: number } | null}
+   * @returns {{ dist: number, angle: number, midVx: number, midVy: number } | null}
    */
   function getTwoPointersGeometry() {
     if (state.activePointers.size < 2) {
@@ -2399,13 +2562,16 @@
 
     const midVx = midClientX - rect.left;
     const midVy = midClientY - rect.top;
-    const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+    const dx = p2.clientX - p1.clientX;
+    const dy = p2.clientY - p1.clientY;
+    const dist = Math.hypot(dx, dy);
+    const angle = Math.atan2(dy, dx);
 
-    return { dist, midVx, midVy };
+    return { dist, angle, midVx, midVy };
   }
 
   /**
-   * アクティブなポインタが2本になった時点でピンチモードを開始します。
+   * アクティブなポインタが2本になった時点でピンチ・ツイストモードを開始します。
    * 進行中の1本指操作を安全に中断し、全ての指が離れるまで1本指描画を再開しないロックをかけます。
    */
   function startPinchGesture() {
@@ -2419,8 +2585,11 @@
       // ゼロ除算防止のため最小距離を 1px 以上に保証
       state.pinchStartDist = Math.max(1, geom.dist);
       state.pinchStartZoom = state.zoom;
+      state.pinchPrevDist = geom.dist;
       state.pinchPrevMidVx = geom.midVx;
       state.pinchPrevMidVy = geom.midVy;
+      state.pinchPrevAngle = geom.angle;
+      state.pinchRawRotation = state.rotation;
     }
 
     updateCanvasCursorStyle();
@@ -2428,8 +2597,9 @@
   }
 
   /**
-   * 2本指ピンチ中のポインタ移動に応じて、中点基準のズームおよび2本指ドラッグによるパンを同時実行します。
-   * 既存の `setZoomLevel(倍率, 中心x, 中心y)` の仕組みを活かしてズーム範囲 (0.1〜8.0倍) でクランプします。
+   * 2本指ジェスチャー中のポインタ移動に応じて、
+   * 中点移動によるパン・2本指ツイストによる中点中心回転・距離変化による中点中心ズームを同時実行します。
+   * ズームが上下限 (0.1〜8.0倍) に達した際の再基準化や、90°倍数への ±3° スナップも処理します。
    */
   function updatePinchGesture() {
     if (!state.hasImage || !state.isPinching || state.activePointers.size < 2) {
@@ -2447,13 +2617,29 @@
     state.panX += deltaMidX;
     state.panY += deltaMidY;
 
-    // 2. 2本指の距離の変化率から目標ズーム倍率を計算し、既存のズーム範囲 (MIN_ZOOM=0.1 〜 MAX_ZOOM=8.0) でクランプ
+    // 2. 2点を結ぶベクトルの前回角度からの差分 (−π〜π正規化) を累積し、中点アンカーで回転を適用
+    if (geom.dist >= 1) {
+      if (state.pinchPrevDist >= 1) {
+        const deltaAngle = normalizeAngleRad(geom.angle - state.pinchPrevAngle);
+        state.pinchRawRotation = normalizeAngleRad(state.pinchRawRotation + deltaAngle);
+        const snappedRotation = snapRotationAngle(state.pinchRawRotation);
+        if (snappedRotation !== state.rotation) {
+          const anchor = viewportToImageCoords(geom.midVx, geom.midVy);
+          state.rotation = snappedRotation;
+          updatePanForAnchor(geom.midVx, geom.midVy, anchor.ix, anchor.iy);
+        }
+      }
+      state.pinchPrevAngle = geom.angle;
+    }
+    state.pinchPrevDist = geom.dist;
+
+    // 3. 2本指の距離の変化率から目標ズーム倍率を計算し、既存のズーム範囲 (MIN_ZOOM=0.1 〜 MAX_ZOOM=8.0) でクランプ
     const currentDist = Math.max(1, geom.dist);
     const scaleRatio = currentDist / Math.max(1, state.pinchStartDist);
     const rawTargetZoom = state.pinchStartZoom * scaleRatio;
     const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawTargetZoom));
 
-    // 2本指の中点 (geom.midVx, geom.midVy) を中心として setZoomLevel で拡大・縮小および再描画を実行
+    // 2本指の中点 (geom.midVx, geom.midVy) を中心として setZoomLevel で拡大・縮小およびUI更新・再描画を実行
     setZoomLevel(clampedZoom, geom.midVx, geom.midVy);
 
     // ズーム倍率が上下限 (0.1倍 または 8.0倍) に達している場合は、逆方向へピンチした際に即座に反応できるよう基準を更新
@@ -2462,7 +2648,7 @@
       state.pinchStartZoom = state.zoom;
     }
 
-    // 3. 次回フレーム用に現在の中点座標を保存
+    // 4. 次回フレーム用に現在の中点座標を保存
     state.pinchPrevMidVx = geom.midVx;
     state.pinchPrevMidVy = geom.midVy;
   }
@@ -2653,6 +2839,7 @@
       const dy = e.clientY - state.panStartClientY;
       state.panX = state.panOriginX + dx;
       state.panY = state.panOriginY + dy;
+      syncCursorImageFromViewport();
       renderDisplayCanvas();
       return;
     }

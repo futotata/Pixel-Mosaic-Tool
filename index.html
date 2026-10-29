@@ -360,7 +360,7 @@
 
         <div class="zoom-controls" role="group" aria-label="ズーム倍率操作">
           <button type="button" id="zoomOutBtn" class="btn-icon-only" aria-label="ズームアウト (縮小 -)">−</button>
-          <span id="zoomLevelText" class="zoom-level-text" title="現在の表示倍率 (0.1x〜8.0x)">100%</span>
+          <span id="zoomLevelText" class="zoom-level-text" title="現在の表示倍率 (0.1x〜8.0x) と回転角">100%</span>
           <button type="button" id="zoomInBtn" class="btn-icon-only" aria-label="ズームイン (拡大 +)">＋</button>
           <button type="button" id="zoomResetBtn" class="btn-zoom-chip" aria-label="ズームを100%等倍にリセット (0)">100%</button>
           <button type="button" id="zoomFitBtn" class="btn-zoom-chip" aria-label="画像を画面サイズにフィット表示">フィット</button>
@@ -553,6 +553,7 @@
         <span><kbd>H</kbd> 押下中は原画比較</span>
         <span><kbd>ホイール</kbd> / <kbd>+</kbd><kbd>-</kbd><kbd>0</kbd> ズーム</span>
         <span><kbd>2本指ピンチ</kbd> ズーム</span>
+        <span><kbd>2本指でひねる</kbd> キャンバス回転</span>
         <span><kbd>中ボタン</kbd> / <kbd>Space</kbd>+ドラッグ パン移動</span>
         <span><kbd>Ctrl+S</kbd> 保存</span>
       </footer>
@@ -627,6 +628,10 @@
         <div class="shortcut-help-item">
           <div class="shortcut-help-keys"><kbd>2本指ピンチ</kbd> <span class="key-sep">/</span> <kbd>2本指ドラッグ</kbd></div>
           <div class="shortcut-help-desc">タッチ操作でズーム（拡大・縮小）・画面移動</div>
+        </div>
+        <div class="shortcut-help-item">
+          <div class="shortcut-help-keys"><kbd>2本指でひねる</kbd></div>
+          <div class="shortcut-help-desc">キャンバス回転（表示のみ回転・90°単位でスナップ／フィットで0°にリセット）</div>
         </div>
         <div class="shortcut-help-item">
           <div class="shortcut-help-keys"><kbd>＋</kbd> <kbd>－</kbd> <kbd>0</kbd> <span class="key-sep">/</span> <kbd>ホイール</kbd></div>
