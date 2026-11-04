@@ -48,9 +48,9 @@
       <!-- スクロール可能なパネル本体 -->
       <div class="panel-body">
 
-        <!-- 1. 画像ファイル読み込み & 画像情報・推奨モザイクサイズ常時表示 -->
+        <!-- 1. 画像ファイル読み込み & 画像情報表示 -->
         <section class="panel-section" aria-labelledby="sectionFileHeading">
-          <h2 id="sectionFileHeading" class="section-title">1. 画像ファイル・推奨値</h2>
+          <h2 id="sectionFileHeading" class="section-title">1. 画像ファイル</h2>
 
           <!-- 非表示のファイル選択input (PNG / JPG / WebP 対応) -->
           <input
@@ -71,7 +71,7 @@
             </button>
           </div>
 
-          <!-- 画像情報と推奨モザイクサイズの常時表示カード -->
+          <!-- 画像情報の常時表示カード -->
           <div class="info-card" aria-live="polite">
             <div class="info-row">
               <span class="info-label">ファイル名:</span>
@@ -85,30 +85,30 @@
               <span class="info-label">画像の長辺:</span>
               <strong id="infoLongSide" class="info-value accent-cyan">- px</strong>
             </div>
-            <div class="info-row highlight-row">
-              <span class="info-label" title="長辺400px以上なら ceil(長辺/100)、最小4px">推奨モザイクサイズ:</span>
-              <strong id="infoRecommendedSize" class="info-value accent-purple">4 px <small>(最小4px)</small></strong>
-            </div>
-            <p class="formula-note">算出式: <code>max(4, ceil(長辺 / 100))</code></p>
-
-            <!-- 推奨値適用ボタン -->
-            <button
-              type="button"
-              id="applyRecommendedBtn"
-              class="btn btn-accent btn-full"
-              aria-label="推奨モザイクサイズを現在の設定に適用する"
-            >
-              ✨ 推奨値をモザイクサイズに適用 (<span id="recommendedBtnValue">4</span>px)
-            </button>
           </div>
         </section>
 
-        <!-- 2. モザイクサイズ設定 -->
+        <!-- 2. モザイクサイズ設定 (推奨モザイクサイズ表示・適用 + サイズ調整) -->
         <section class="panel-section" aria-labelledby="sectionSizeHeading">
           <h2 id="sectionSizeHeading" class="section-title">2. モザイクサイズ</h2>
 
-          <!-- モザイクサイズ (1〜200px, 1px単位, スライダー+数値連動) -->
+          <!-- 推奨モザイクサイズ & モザイクサイズ調整 (1〜200px, 1px単位, スライダー+数値連動) -->
           <div class="control-group">
+            <div class="recommended-row" aria-live="polite">
+              <div class="recommended-info">
+                <span class="info-label" title="長辺400px以上なら ceil(長辺/100)、最小4px">推奨モザイクサイズ:</span>
+                <strong id="infoRecommendedSize" class="info-value accent-purple">4 px <small>(最小4px)</small></strong>
+              </div>
+              <button
+                type="button"
+                id="applyRecommendedBtn"
+                class="btn btn-accent btn-recommended-inline"
+                aria-label="推奨モザイクサイズを現在の設定に適用する"
+              >
+                ✨ 推奨値を適用<span class="sr-only"> (<span id="recommendedBtnValue">4</span>px)</span>
+              </button>
+            </div>
+
             <div class="control-header">
               <label for="mosaicSizeSlider" class="control-label">モザイクサイズ (1〜200px)</label>
               <div class="number-input-wrap">
