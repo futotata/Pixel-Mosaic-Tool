@@ -88,7 +88,7 @@
           </div>
         </section>
 
-        <!-- 2. モザイクサイズ設定 (推奨モザイクサイズ表示・適用 + サイズ調整) -->
+        <!-- 2. モザイクサイズ設定 (推奨モザイクサイズ表示・適用 + ロック切替 + サイズ調整) -->
         <section class="panel-section" aria-labelledby="sectionSizeHeading">
           <h2 id="sectionSizeHeading" class="section-title">2. モザイクサイズ</h2>
 
@@ -103,10 +103,18 @@
                 type="button"
                 id="applyRecommendedBtn"
                 class="btn btn-accent btn-recommended-inline"
+                disabled
                 aria-label="推奨モザイクサイズを現在の設定に適用する"
               >
                 ✨ 推奨値を適用<span class="sr-only"> (<span id="recommendedBtnValue">4</span>px)</span>
               </button>
+              <button
+                type="button"
+                id="mosaicLockBtn"
+                class="btn btn-recommended-inline btn-mosaic-lock active"
+                aria-pressed="true"
+                title="モザイクサイズの推奨値ロックを切り替え"
+              >🔒 ロック中</button>
             </div>
 
             <div class="control-header">
@@ -120,7 +128,8 @@
                   min="1"
                   max="200"
                   step="1"
-                  value="16"
+                  value="4"
+                  disabled
                   aria-label="モザイクサイズ数値入力 (1から200ピクセル)"
                 >
                 <span class="unit-label">px</span>
@@ -133,7 +142,8 @@
               min="1"
               max="200"
               step="1"
-              value="16"
+              value="4"
+              disabled
               aria-label="モザイクサイズスライダー (1から200ピクセル)"
             >
             <div class="range-ticks">

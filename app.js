@@ -60,9 +60,11 @@
     mimeType: 'image/png',
     // 推奨モザイクサイズ (長辺から算出、最小4px)
     recommendedMosaicSize: 4,
+    // モザイクサイズを推奨値にロックしているかどうか (初期値: true = ロックON)
+    mosaicSizeLocked: true,
 
-    // 現在のモザイクサイズ (1〜200px)
-    mosaicSize: 16,
+    // 現在のモザイクサイズ (1〜200px, 初期値は推奨値の初期値4px)
+    mosaicSize: 4,
     // 現在のブラシ直径サイズ (4〜400px)
     brushSize: 64,
 
@@ -212,6 +214,7 @@
     infoRecommendedSize: document.getElementById('infoRecommendedSize'),
     recommendedBtnValue: document.getElementById('recommendedBtnValue'),
     applyRecommendedBtn: document.getElementById('applyRecommendedBtn'),
+    mosaicLockBtn: document.getElementById('mosaicLockBtn'),
 
     // ツール切替ボタン
     toolBrushBtn: document.getElementById('toolBrushBtn'),
@@ -402,6 +405,39 @@
       renderDisplayCanvas();
     } else if (state.hasImage) {
       renderDisplayCanvas();
+    }
+  }
+
+  /**
+   * モザイクサイズの推奨値ロック状態 (`state.mosaicSizeLocked`) に応じて、
+   * ロック切替ボタンの表示・`aria-pressed`・アクティブ見た目と、
+   * スライダー・数値入力・推奨値適用ボタンの `disabled` 状態を更新します。
+   */
+  function updateMosaicLockUI() {
+    const locked = Boolean(state.mosaicSizeLocked);
+    if (dom.mosaicLockBtn) {
+      dom.mosaicLockBtn.classList.toggle('active', locked);
+      dom.mosaicLockBtn.setAttribute('aria-pressed', String(locked));
+      dom.mosaicLockBtn.textContent = locked ? '🔒 ロック中' : '🔓 解除中';
+    }
+    dom.mosaicSizeSlider.disabled = locked;
+    dom.mosaicSizeInput.disabled = locked;
+    dom.applyRecommendedBtn.disabled = locked;
+  }
+
+  /**
+   * モザイクサイズの推奨値ロック状態を設定します。
+   * - ロックONにしたとき: コントロールを無効化し、モザイクサイズを即座に推奨値 (`state.recommendedMosaicSize`) へ戻します。
+   * - ロックOFFにしたとき: コントロールを有効化します（値はその時点の推奨値のまま維持）。
+   *
+   * @param {boolean} locked ロックONなら true、ロックOFFなら false
+   * @param {boolean} [updatePreview=true] ロックONへの復帰時に矩形選択プレビューを更新するかどうか
+   */
+  function setMosaicSizeLocked(locked, updatePreview = true) {
+    state.mosaicSizeLocked = Boolean(locked);
+    updateMosaicLockUI();
+    if (state.mosaicSizeLocked) {
+      setMosaicSize(state.recommendedMosaicSize, updatePreview);
     }
   }
 
@@ -1783,8 +1819,8 @@
     dom.infoRecommendedSize.innerHTML = `${recommended} px <small>(推奨値)</small>`;
     dom.recommendedBtnValue.textContent = String(recommended);
 
-    // 画像読み込み時に推奨モザイクサイズを初期セット
-    setMosaicSize(recommended, false);
+    // 画像読み込み時は必ずロックONに戻し、その画像の推奨モザイクサイズを初期適用
+    setMosaicSizeLocked(true, false);
 
     // 初期画面を隠して操作ボタンを有効化
     dom.emptyStateBox.hidden = true;
@@ -2144,7 +2180,7 @@
   /**
    * 編集中の画像を閉じてアプリ起動直後の開始画面（未読み込み状態）に戻します。
    * - モザイク編集の履歴が残っている場合は confirm() で確認し、キャンセル時は何もしません。
-   * - 設定類（モザイクサイズ、ブラシサイズ、選択中ツール、ブラシ／消しゴムモード、ショートカット説明の表示設定、Wake Lock）は維持します。
+   * - モザイクサイズは推奨値初期値 (4px)・ロックON（コントロール無効）の起動直後の状態に戻し、その他の設定類（ブラシサイズ、選択中ツール、ブラシ／消しゴムモード、ショートカット説明の表示設定、Wake Lock）は維持します。
    */
   function closeCurrentImage() {
     if (!state.hasImage) {
@@ -2266,6 +2302,9 @@
     dom.infoLongSide.textContent = '- px';
     dom.infoRecommendedSize.innerHTML = '4 px <small>(最小4px)</small>';
     dom.recommendedBtnValue.textContent = '4';
+
+    // モザイクサイズのロックをONに戻し、推奨値初期値 (4px)・コントロール無効の起動直後の状態にする
+    setMosaicSizeLocked(true, false);
 
     // 9. 保存／名前を付けて保存／閉じる／比較ボタンを無効化する
     dom.saveBtn.disabled = true;
@@ -3030,10 +3069,18 @@
     dom.loadSampleBtn.addEventListener('click', loadGeneratedSampleImage);
     dom.emptySampleBtn.addEventListener('click', loadGeneratedSampleImage);
 
-    // 推奨値適用ボタン
+    // 推奨値適用ボタン (ロック中は disabled に加えハンドラ側でも変更を受け付けない)
     dom.applyRecommendedBtn.addEventListener('click', () => {
+      if (state.mosaicSizeLocked) {
+        return;
+      }
       setMosaicSize(state.recommendedMosaicSize, true);
       showToast(`推奨モザイクサイズ (${state.recommendedMosaicSize}px) を適用しました`, 'info', 2200);
+    });
+
+    // モザイクサイズの推奨値ロック切替ボタン
+    dom.mosaicLockBtn.addEventListener('click', () => {
+      setMosaicSizeLocked(!state.mosaicSizeLocked, true);
     });
 
     // ツール切替ボタン
@@ -3051,16 +3098,35 @@
     dom.cancelRectBtn.addEventListener('click', cancelRectSelection);
     dom.floatingCancelBtn.addEventListener('click', cancelRectSelection);
 
-    // モザイクサイズ連動 (スライダー & 数値入力)
+    // モザイクサイズ連動 (スライダー & 数値入力: ロック中はイベントハンドラ側でも変更を無視する二重保護)
     dom.mosaicSizeSlider.addEventListener('input', (e) => {
+      if (state.mosaicSizeLocked) {
+        dom.mosaicSizeSlider.value = String(state.mosaicSize);
+        return;
+      }
+      setMosaicSize(e.target.value, true);
+    });
+    dom.mosaicSizeSlider.addEventListener('change', (e) => {
+      if (state.mosaicSizeLocked) {
+        dom.mosaicSizeSlider.value = String(state.mosaicSize);
+        return;
+      }
       setMosaicSize(e.target.value, true);
     });
     dom.mosaicSizeInput.addEventListener('input', (e) => {
+      if (state.mosaicSizeLocked) {
+        dom.mosaicSizeInput.value = String(state.mosaicSize);
+        return;
+      }
       if (e.target.value !== '') {
         setMosaicSize(e.target.value, true);
       }
     });
     dom.mosaicSizeInput.addEventListener('change', (e) => {
+      if (state.mosaicSizeLocked) {
+        dom.mosaicSizeInput.value = String(state.mosaicSize);
+        return;
+      }
       setMosaicSize(e.target.value || state.mosaicSize, true);
     });
 
@@ -3406,7 +3472,8 @@
     bindAllEvents();
     // 初期状態ではショートカット説明を非表示 (body.shortcuts-visible クラス無し) に設定
     setShortcutsVisible(false);
-    setMosaicSize(state.mosaicSize, false);
+    // 起動直後はモザイクサイズを推奨値初期値 (4px) でロックON (コントロール無効) に設定
+    setMosaicSizeLocked(true, false);
     setBrushSize(state.brushSize);
     resizeDisplayCanvas();
     registerServiceWorker();

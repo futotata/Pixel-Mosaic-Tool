@@ -426,12 +426,13 @@ body.shortcuts-visible .kbd-hint {
   color: #b19cff;
 }
 
-/* セクション2: 推奨モザイクサイズ＋推奨値適用ボタンの横並び1行表示 */
+/* セクション2: 推奨モザイクサイズ＋推奨値適用ボタン＋ロック切替ボタンの行表示 */
 .recommended-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 5px 6px;
   padding-bottom: 5px;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
 }
@@ -441,6 +442,7 @@ body.shortcuts-visible .kbd-hint {
   align-items: baseline;
   gap: 4px;
   min-width: 0;
+  margin-right: auto;
   font-size: 11px;
   white-space: nowrap;
 }
@@ -469,6 +471,34 @@ body.shortcuts-visible .kbd-hint {
   font-size: 11px;
   gap: 3px;
   line-height: 1.35;
+}
+
+/* モザイクサイズ推奨値ロック切替ボタン */
+.btn-mosaic-lock {
+  background-color: var(--bg-panel);
+  border-color: var(--border-color);
+  color: var(--text-sub);
+}
+
+.btn-mosaic-lock:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  border-color: #3e3e52;
+  color: var(--text-main);
+}
+
+.btn-mosaic-lock.active,
+.btn-mosaic-lock[aria-pressed="true"] {
+  background: linear-gradient(135deg, rgba(123, 92, 255, 0.32) 0%, rgba(0, 212, 255, 0.22) 100%);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.35) inset, 0 2px 8px rgba(0, 212, 255, 0.2);
+}
+
+.btn-mosaic-lock.active:hover:not(:disabled),
+.btn-mosaic-lock[aria-pressed="true"]:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(123, 92, 255, 0.42) 0%, rgba(0, 212, 255, 0.3) 100%);
+  border-color: var(--accent-cyan-hover);
+  color: #ffffff;
 }
 
 /* ==================== ツール切替ボタングループ ==================== */
@@ -605,6 +635,13 @@ body.shortcuts-visible .kbd-hint {
   box-shadow: 0 0 0 2px rgba(123, 92, 255, 0.25);
 }
 
+.number-input:disabled {
+  opacity: 0.45;
+  color: var(--text-muted);
+  background-color: var(--bg-input);
+  cursor: not-allowed;
+}
+
 .unit-label {
   font-size: 11.5px;
   color: var(--text-sub);
@@ -635,7 +672,7 @@ body.shortcuts-visible .kbd-hint {
   transition: transform 0.1s ease;
 }
 
-.range-slider::-webkit-slider-thumb:hover {
+.range-slider:not(:disabled)::-webkit-slider-thumb:hover {
   transform: scale(1.12);
 }
 
@@ -654,6 +691,24 @@ body.shortcuts-visible .kbd-hint {
 
 .range-slider-cyan::-moz-range-thumb {
   background: var(--accent-cyan);
+}
+
+.range-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.range-slider:disabled::-webkit-slider-thumb {
+  background: var(--text-muted);
+  border-color: var(--text-sub);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.range-slider:disabled::-moz-range-thumb {
+  background: var(--text-muted);
+  border-color: var(--text-sub);
+  cursor: not-allowed;
 }
 
 .range-ticks {
@@ -1514,11 +1569,12 @@ body.shortcuts-visible .shortcut-bar {
   }
 
   .recommended-row {
+    gap: 3px 5px;
     padding-bottom: 3px;
   }
 
   .panel-section .btn-recommended-inline {
-    padding: 2px 7px;
+    padding: 2px 6px;
     font-size: 11px;
     line-height: 1.25;
   }
