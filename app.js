@@ -29,6 +29,10 @@
   const ROTATION_SNAP_STEP_RAD = Math.PI / 2;
   const ROTATION_SNAP_THRESHOLD_RAD = (3 * Math.PI) / 180;
 
+  /** 2本指タップで Undo と判定する最大経過時間 (ms) と各指の最大移動量 (px) */
+  const TWO_FINGER_TAP_MAX_DURATION_MS = 300;
+  const TWO_FINGER_TAP_MAX_MOVE_PX = 12;
+
   /**
    * Undo/Redo 履歴の最大保持ステップ数
    * 仕様要件: 「最低20段階 (スタック上限30以上)」を満たすため35段階 (初期状態含め36要素) に設定
@@ -127,7 +131,7 @@
     shortcutsVisible: false,
 
     // マルチタッチ・2本指ピンチズーム追跡用の状態
-    // activePointers: Map<number, { clientX: number, clientY: number }> (キャンバスに触れているアクティブなポインタ)
+    // activePointers: Map<number, { clientX: number, clientY: number, pointerType: string }> (キャンバスに触れているアクティブなポインタ)
     activePointers: new Map(),
     // 現在2本指ピンチ操作中かどうか
     isPinching: false,
@@ -142,6 +146,9 @@
     pinchPrevMidVy: 0,
     pinchPrevAngle: 0,
     pinchRawRotation: 0,
+    // 2本指タップ (Undo) の判定候補。2本目のタッチ時に開始し、発火または不成立で null に戻す
+    // { startTime: number, pointers: Map<number, { pointerType: string, startX: number, startY: number, maxMove: number }> } | null
+    twoFingerTapCandidate: null,
 
     // Undo / Redo 履歴スタック
     // 各要素は { type: 'imagedata' | 'dataurl', data: ImageData | string }
@@ -1776,6 +1783,7 @@
     state.activePointers.clear();
     state.isPinching = false;
     state.ignoreSinglePointerUntilAllReleased = false;
+    state.twoFingerTapCandidate = null;
     state.rotation = 0;
     state.pinchStartDist = 0;
     state.pinchStartZoom = 1.0;
@@ -2209,6 +2217,7 @@
     state.activePointers.clear();
     state.isPinching = false;
     state.ignoreSinglePointerUntilAllReleased = false;
+    state.twoFingerTapCandidate = null;
     state.pinchStartDist = 0;
     state.pinchStartZoom = 1.0;
     state.pinchPrevDist = 0;
@@ -2693,6 +2702,86 @@
   }
 
   /**
+   * アクティブなポインタがちょうど2本になった時点で、2本指タップ (Undo) の判定候補を開始します。
+   * 開始時刻・2本それぞれの開始座標・ポインタ種別を記録し、最大移動量を 0 で初期化します。
+   */
+  function startTwoFingerTapCandidate() {
+    const pointers = new Map();
+    for (const [pointerId, p] of state.activePointers) {
+      pointers.set(pointerId, {
+        pointerType: p.pointerType,
+        startX: p.clientX,
+        startY: p.clientY,
+        maxMove: 0
+      });
+    }
+    state.twoFingerTapCandidate = {
+      startTime: performance.now(),
+      pointers
+    };
+  }
+
+  /**
+   * 2本指タップ候補中のポインタ移動に応じて、そのポインタの開始座標からの最大移動量を更新します。
+   * @param {PointerEvent} e
+   */
+  function updateTwoFingerTapCandidateMove(e) {
+    if (!state.twoFingerTapCandidate) {
+      return;
+    }
+    updateTwoFingerTapCandidateMoveFrom(state.twoFingerTapCandidate, e);
+  }
+
+  /**
+   * 2本指タップ候補の2本のうち最初の1本が離れた (またはキャンセルされた) 時点で成立条件を判定します。
+   * 判定後は成立・不成立にかかわらず候補を破棄するため、もう1本の解放では再発火しません。
+   * @param {PointerEvent} e
+   * @returns {boolean} 2本指タップとして成立し Undo を発火すべき場合は true
+   */
+  function resolveTwoFingerTapCandidate(e) {
+    const candidate = state.twoFingerTapCandidate;
+    if (!candidate || !candidate.pointers.has(e.pointerId)) {
+      return false;
+    }
+    state.twoFingerTapCandidate = null;
+
+    // 最新の解放位置も移動量に反映してから判定する
+    // (pointercancel は座標が信頼できない環境があるため pointerup のときのみ反映)
+    if (e.type === 'pointerup') {
+      updateTwoFingerTapCandidateMoveFrom(candidate, e);
+    }
+
+    if (!state.hasImage || candidate.pointers.size !== 2) {
+      return false;
+    }
+    if (performance.now() - candidate.startTime > TWO_FINGER_TAP_MAX_DURATION_MS) {
+      return false;
+    }
+    for (const info of candidate.pointers.values()) {
+      if (info.pointerType !== 'touch' || info.maxMove > TWO_FINGER_TAP_MAX_MOVE_PX) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 指定した候補オブジェクトに対して、イベント座標からポインタの最大移動量を更新します。
+   * @param {{ pointers: Map<number, { startX: number, startY: number, maxMove: number }> }} candidate
+   * @param {PointerEvent} e
+   */
+  function updateTwoFingerTapCandidateMoveFrom(candidate, e) {
+    const info = candidate.pointers.get(e.pointerId);
+    if (!info) {
+      return;
+    }
+    const moved = Math.hypot(e.clientX - info.startX, e.clientY - info.startY);
+    if (moved > info.maxMove) {
+      info.maxMove = moved;
+    }
+  }
+
+  /**
    * キャンバス上でポインターが押下されたときの処理
    * @param {PointerEvent} e
    */
@@ -2705,12 +2794,20 @@
     // キャンバスに触れているアクティブなポインタを Map (pointerId → 座標) に登録して追跡
     state.activePointers.set(e.pointerId, {
       clientX: e.clientX,
-      clientY: e.clientY
+      clientY: e.clientY,
+      pointerType: e.pointerType
     });
     try {
       dom.displayCanvas.setPointerCapture(e.pointerId);
     } catch (_) {
       // 合成イベント等で pointerId がキャプチャ不可な環境でもエラーにしない
+    }
+
+    // 2本指タップ (Undo) 判定: ちょうど2本になった時点で候補を開始し、3本目が触れたら候補を破棄
+    if (state.activePointers.size === 2) {
+      startTwoFingerTapCandidate();
+    } else if (state.activePointers.size > 2) {
+      state.twoFingerTapCandidate = null;
     }
 
     // ポインタが2本以上になったらピンチモードに入る (進行中の1本指操作は安全に中断)
@@ -2840,9 +2937,13 @@
     if (state.activePointers.has(e.pointerId)) {
       state.activePointers.set(e.pointerId, {
         clientX: e.clientX,
-        clientY: e.clientY
+        clientY: e.clientY,
+        pointerType: e.pointerType
       });
     }
+
+    // 2本指タップ候補中であれば、各ポインタの開始座標からの最大移動量を更新
+    updateTwoFingerTapCandidateMove(e);
 
     // 2本指ピンチモード中はピンチズーム＆2本指パンのみを行い、1本指の描画処理は行わない
     if (state.isPinching) {
@@ -2966,6 +3067,9 @@
     // 離れた（またはキャンセルされた）ポインタを Map から確実に削除
     state.activePointers.delete(e.pointerId);
 
+    // 2本指タップ候補の最初の1本が離れた時点で成立判定 (判定後は候補を破棄し、もう1本の解放では再発火しない)
+    const isTwoFingerTap = resolveTwoFingerTapCandidate(e);
+
     // ピンチ操作中、またはピンチ後の全指リリース待ち状態だった場合の処理
     if (state.isPinching || state.ignoreSinglePointerUntilAllReleased) {
       if (state.activePointers.size >= 2 && state.hasImage) {
@@ -2980,6 +3084,10 @@
         }
         updateCanvasCursorStyle();
         renderDisplayCanvas();
+      }
+      // 2本指タップ成立時は直前の確定済み編集を1つ取り消す (履歴が無い場合は performUndo 側のガードで何もしない)
+      if (isTwoFingerTap) {
+        performUndo();
       }
       return;
     }

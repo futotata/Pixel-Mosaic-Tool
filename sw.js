@@ -5,8 +5,8 @@
  * PWAとして単一完結で動作できるようにするためのService Workerです。
  */
 
-// キャッシュバージョン名（ファイル更新時はバージョン番号を上げることで古いキャッシュを破棄: v11 -> v12）
-const CACHE_NAME = 'pixel-mosaic-tool-v12';
+// キャッシュバージョン名（ファイル更新時はバージョン番号を上げることで古いキャッシュを破棄: v12 -> v13）
+const CACHE_NAME = 'pixel-mosaic-tool-v13';
 
 // インストール時に事前キャッシュする同一オリジン静的アセット一覧
 const STATIC_ASSETS = [
