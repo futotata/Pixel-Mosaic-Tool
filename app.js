@@ -32,6 +32,8 @@
   /** 2本指タップで Undo と判定する最大経過時間 (ms) と各指の最大移動量 (px) */
   const TWO_FINGER_TAP_MAX_DURATION_MS = 300;
   const TWO_FINGER_TAP_MAX_MOVE_PX = 12;
+  /** 「元に戻す」インジケーター (#undoIndicator) の表示時間 (ms) */
+  const UNDO_INDICATOR_DURATION_MS = 1800;
 
   /**
    * Undo/Redo 履歴の最大保持ステップ数
@@ -288,6 +290,7 @@
     shortcutGrid: document.getElementById('shortcutGrid'),
     shortcutBar: document.getElementById('shortcutBar'),
     dropOverlay: document.getElementById('dropOverlay'),
+    undoIndicator: document.getElementById('undoIndicator'),
     toastContainer: document.getElementById('toastContainer')
   };
 
@@ -328,6 +331,30 @@
     } catch (err) {
       console.error('トースト表示中にエラーが発生しました:', err);
     }
+  }
+
+  /** 「元に戻す」インジケーターを非表示にするタイマーID */
+  let undoIndicatorTimerId = null;
+
+  /**
+   * キャンバス中央の「元に戻す」インジケーター (#undoIndicator) にメッセージを大きく表示し、
+   * 約1800ms後にフェードアウトさせます。連続呼び出し時は同じ要素の文字列を更新してタイマーをリセットします。
+   * @param {string} message 表示するメッセージ
+   */
+  function showUndoIndicator(message) {
+    const el = dom.undoIndicator;
+    if (!el) {
+      return;
+    }
+    el.textContent = message;
+    el.classList.add('is-visible');
+    if (undoIndicatorTimerId !== null) {
+      window.clearTimeout(undoIndicatorTimerId);
+    }
+    undoIndicatorTimerId = window.setTimeout(() => {
+      undoIndicatorTimerId = null;
+      el.classList.remove('is-visible');
+    }, UNDO_INDICATOR_DURATION_MS);
   }
 
   /**
@@ -1048,7 +1075,7 @@
     // 未確定の矩形選択がある場合は、まずその選択を解除する
     if (state.rectSelection) {
       cancelRectSelection();
-      showToast('未確定の矩形選択を解除しました', 'info', 2000);
+      showUndoIndicator('未確定の矩形選択を解除しました');
       return;
     }
     if (state.historyIndex <= 0) {
@@ -1057,7 +1084,7 @@
     state.historyIndex--;
     restoreCanvasSnapshot(state.historyStack[state.historyIndex]);
     updateHistoryUI();
-    showToast(`元に戻しました (${state.historyIndex} / ${state.historyStack.length - 1})`, 'info', 1800);
+    showUndoIndicator(`↩ 元に戻しました (${state.historyIndex} / ${state.historyStack.length - 1})`);
   }
 
   /**
@@ -2759,6 +2786,14 @@
     }
     for (const info of candidate.pointers.values()) {
       if (info.pointerType !== 'touch' || info.maxMove > TWO_FINGER_TAP_MAX_MOVE_PX) {
+        return false;
+      }
+    }
+    // 2本とも開始位置が画像の表示範囲内である場合のみ成立 (キャンバス余白部分でのタップでは発火しない)
+    // クライアント座標 → ビューポート座標 → viewportToImageCoords で画像座標へ変換して判定するため回転表示中も正しく扱える
+    for (const info of candidate.pointers.values()) {
+      const { ix, iy } = clientToImageCoords(info.startX, info.startY);
+      if (!(ix >= 0 && ix <= state.imageWidth && iy >= 0 && iy <= state.imageHeight)) {
         return false;
       }
     }
