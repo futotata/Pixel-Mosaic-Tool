@@ -496,6 +496,12 @@
 
       <!-- 下部ブラシサイズ調節バー (円形プレビュー直径, スライダー+数値連動, ブラシ/消しゴム切替) -->
       <div id="brushControlGroup" class="control-group brush-size-bar">
+        <!-- 現在のモザイクサイズ表示 (表示専用, setMosaicSize() で更新) -->
+        <div class="current-mosaic-size">
+          <span class="current-mosaic-size-label">モザイク</span>
+          <span id="currentMosaicSizeValue" class="current-mosaic-size-value">4px</span>
+        </div>
+
         <div class="brush-size-controls">
           <div class="control-header">
             <label for="brushSizeSlider" class="control-label">ブラシサイズ (円形直径)</label>

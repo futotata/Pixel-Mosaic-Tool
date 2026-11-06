@@ -1214,6 +1214,34 @@ body.shortcuts-visible .shortcut-grid {
   z-index: 10;
 }
 
+/* 下部バー左端: 現在のモザイクサイズ表示 (表示専用, 縮ませない) */
+.current-mosaic-size {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  flex-shrink: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--border-color);
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.current-mosaic-size-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+.current-mosaic-size-value {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
 .brush-size-controls {
   flex: 1;
   min-width: 0;
@@ -1641,6 +1669,19 @@ body.shortcuts-visible .shortcut-bar {
 
   .brush-size-controls {
     gap: 2px;
+  }
+
+  .current-mosaic-size {
+    gap: 0;
+    padding-right: 8px;
+  }
+
+  .current-mosaic-size-label {
+    font-size: 10px;
+  }
+
+  .current-mosaic-size-value {
+    font-size: 12.5px;
   }
 
   .brush-size-controls .control-label {

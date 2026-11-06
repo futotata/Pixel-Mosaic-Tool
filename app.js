@@ -108,7 +108,10 @@
     brushGridCols: 0,
     brushGridRows: 0,
     brushVisitedCells: null, // Uint8Array: 1ストローク内でモザイク適用済みのグリッドセル記録
-    brushPaintedCells: null, // Map<number, { cellX, cellY, cellW, cellH, colorInfo }>: 確定時に mosaicCtx へ塗るセル群
+    // Map<number, { cellX, cellY, cellW, cellH, colorInfo, stamps: Array<{ cx, cy, r, seq }>, full: boolean }>:
+    // 確定時に mosaicCtx へ塗るセル群（各セルに触れたスタンプ円のリストを保持し、セル∩円の範囲だけを塗る）
+    brushPaintedCells: null,
+    brushStampSeq: 0, // ブラシスタンプの通し番号（確定時にスタンプ順を再現するため）
     brushTouchedAny: false,
 
     // 消しゴムストローク操作中の状態
@@ -243,6 +246,7 @@
     // サイズ設定スライダー＆数値入力＆ブラシ/消しゴム切替ボタン
     mosaicSizeSlider: document.getElementById('mosaicSizeSlider'),
     mosaicSizeInput: document.getElementById('mosaicSizeInput'),
+    currentMosaicSizeValue: document.getElementById('currentMosaicSizeValue'),
     brushControlGroup: document.getElementById('brushControlGroup'),
     brushSizeSlider: document.getElementById('brushSizeSlider'),
     brushSizeInput: document.getElementById('brushSizeInput'),
@@ -432,6 +436,11 @@
     // スライダーと数値入力の表示値を同期
     dom.mosaicSizeSlider.value = String(clamped);
     dom.mosaicSizeInput.value = String(clamped);
+
+    // 下部バー左端の「現在のモザイクサイズ」表示を同期（表示専用）
+    if (dom.currentMosaicSizeValue) {
+      dom.currentMosaicSizeValue.textContent = `${clamped}px`;
+    }
 
     // 矩形選択中なら新しいモザイクサイズでリアルタイムプレビューを更新
     if (updatePreview && state.hasImage && state.rectSelection) {
@@ -683,9 +692,55 @@
   }
 
   /**
+   * 1つのブラシスタンプ円 (中心 stamp.cx, stamp.cy / 半径 stamp.r) と各セル矩形の共通部分だけを、
+   * そのセルの平均色で塗りつぶします。
+   * Canvas のクリップを「円 → セル矩形」の順に重ねて交差範囲を取り、その範囲内でのみ
+   * `clearRect`（平均アルファが 255 未満の場合）と `fillRect` を行うため、
+   * 塗りがスタンプ円の外側へはみ出すことはありません。
+   *
+   * @param {CanvasRenderingContext2D} ctx 描画先2Dコンテキスト (`previewCtx` または `mosaicCtx`)
+   * @param {Array<{ cellX: number, cellY: number, cellW: number, cellH: number, colorInfo: object }>} cells 塗るセル群
+   * @param {{ cx: number, cy: number, r: number }} stamp スタンプ円
+   */
+  function fillMosaicCellsClippedToStamp(ctx, cells, stamp) {
+    if (!cells || cells.length === 0 || !stamp || !(stamp.r > 0)) {
+      return;
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    // スタンプ円でクリップ
+    ctx.beginPath();
+    ctx.arc(stamp.cx, stamp.cy, stamp.r, 0, Math.PI * 2);
+    ctx.clip();
+    for (const cell of cells) {
+      const { cellX, cellY, cellW, cellH, colorInfo } = cell;
+      if (!colorInfo || cellW <= 0 || cellH <= 0) {
+        continue;
+      }
+      ctx.save();
+      // セル矩形でさらにクリップ → 円 ∩ セル矩形
+      ctx.beginPath();
+      ctx.rect(cellX, cellY, cellW, cellH);
+      ctx.clip();
+      if (colorInfo.avgA < 255) {
+        ctx.clearRect(cellX, cellY, cellW, cellH);
+      }
+      ctx.fillStyle = colorInfo.fillStyle;
+      ctx.fillRect(cellX, cellY, cellW, cellH);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  /**
    * ブラシの円形領域 (中心 cx, cy / 直径 brushSize) が重なるグリッドセルを判定し、
-   * 未処理のセルに対して原画基準の平均色ピクセルモザイクを `previewCanvas` に描画するとともに、
-   * 確定時に `mosaicCanvas` へ書き込むためのセル情報を保持します。
+   * 原画基準のセル平均色を「スタンプ円 ∩ セル矩形」の範囲だけ `previewCanvas` に描画するとともに、
+   * 確定時に `mosaicCanvas` へ同じ塗りを再現するためのセル情報（触れたスタンプ円のリスト）を保持します。
+   *
+   * - 未処理セル: 平均色を算出して記録し、このスタンプ分をクリップ塗りします。
+   * - 処理済み (visited) セル: 記録済みのスタンプリストへ追加し、このスタンプ分を追加でクリップ塗りします。
+   * - スタンプ円がセルを完全に覆う場合: セル全面塗りとして扱い (`full`)、以後の追加塗りを省略します
+   *   （同じ平均色での全面塗りのため、円∩セルの塗りを重ねた場合と結果は変わりません）。
    *
    * @param {number} cx ブラシ中心X座標 (画像座標系)
    * @param {number} cy ブラシ中心Y座標 (画像座標系)
@@ -699,6 +754,13 @@
     const radiusSq = radius * radius;
     const imgW = state.imageWidth;
     const imgH = state.imageHeight;
+    const paintedCells = state.brushPaintedCells;
+
+    // このスタンプ円（確定時に同じクリップ塗りを再現するため各セルから参照される）
+    state.brushStampSeq += 1;
+    const stamp = { cx, cy, r: radius, seq: state.brushStampSeq };
+    // このスタンプでクリップ塗りするセル群
+    const clippedCells = [];
 
     // ブラシ円の外接矩形にかかるグリッド列・行の範囲を計算
     const minCol = Math.max(0, Math.floor((cx - radius) / step));
@@ -717,14 +779,11 @@
       // 円の中心 (cx, cy) からセル矩形への最近傍Y座標
       const nearestY = Math.max(cellY, Math.min(cy, cellY + cellH));
       const dy = cy - nearestY;
+      // 円の中心からセル矩形の最遠Y距離（完全被覆判定用）
+      const farDy = Math.max(Math.abs(cy - cellY), Math.abs(cy - (cellY + cellH)));
 
       for (let col = minCol; col <= maxCol; col++) {
         const cellIdx = row * state.brushGridCols + col;
-        // 同一ストローク内で既にモザイク化済みのセルはスキップ
-        if (state.brushVisitedCells[cellIdx] === 1) {
-          continue;
-        }
-
         const cellX = col * step;
         const cellW = Math.min(step, imgW - cellX);
 
@@ -733,18 +792,92 @@
         const dx = cx - nearestX;
 
         const isCenterCell = (col === centerCol && row === centerRow);
-        if (isCenterCell || (dx * dx + dy * dy <= radiusSq)) {
-          state.brushVisitedCells[cellIdx] = 1;
-          const colorInfo = computeCellAverageFromOriginal(cellX, cellY, cellW, cellH);
-          if (colorInfo) {
-            state.brushTouchedAny = true;
-            fillMosaicCellOnContext(previewCtx, cellX, cellY, cellW, cellH, colorInfo);
-            if (state.brushPaintedCells) {
-              state.brushPaintedCells.set(cellIdx, { cellX, cellY, cellW, cellH, colorInfo });
-            }
+        if (!isCenterCell && (dx * dx + dy * dy > radiusSq)) {
+          continue;
+        }
+
+        // スタンプ円がセル矩形を完全に覆うか（4隅すべてが円内）
+        const farDx = Math.max(Math.abs(cx - cellX), Math.abs(cx - (cellX + cellW)));
+        const fullyCovered = (farDx * farDx + farDy * farDy <= radiusSq);
+
+        if (state.brushVisitedCells[cellIdx] === 1) {
+          // 同一ストローク内で処理済みのセル: 記録済みの色で、このスタンプ分を追加塗り
+          const cell = paintedCells ? paintedCells.get(cellIdx) : null;
+          if (!cell || cell.full) {
+            continue;
           }
+          if (fullyCovered) {
+            cell.full = true;
+            cell.stamps = null;
+            fillMosaicCellOnContext(previewCtx, cell.cellX, cell.cellY, cell.cellW, cell.cellH, cell.colorInfo);
+          } else {
+            cell.stamps.push(stamp);
+            clippedCells.push(cell);
+          }
+          continue;
+        }
+
+        state.brushVisitedCells[cellIdx] = 1;
+        const colorInfo = computeCellAverageFromOriginal(cellX, cellY, cellW, cellH);
+        if (!colorInfo) {
+          continue;
+        }
+        state.brushTouchedAny = true;
+        const cell = {
+          cellX,
+          cellY,
+          cellW,
+          cellH,
+          colorInfo,
+          stamps: fullyCovered ? null : [stamp],
+          full: fullyCovered,
+        };
+        if (paintedCells) {
+          paintedCells.set(cellIdx, cell);
+        }
+        if (fullyCovered) {
+          fillMosaicCellOnContext(previewCtx, cellX, cellY, cellW, cellH, colorInfo);
+        } else {
+          clippedCells.push(cell);
         }
       }
+    }
+
+    fillMosaicCellsClippedToStamp(previewCtx, clippedCells, stamp);
+  }
+
+  /**
+   * ブラシストロークで記録したセル群を、プレビュー時と同じ塗り（全面塗り または
+   * 保持した各スタンプ円 ∩ セル矩形のクリップ塗り）で対象コンテキストへ再実行して確定します。
+   * クリップ塗りはスタンプごとにまとめて実行しますが、各セルの塗りはそのセル矩形内に限られ、
+   * かつスタンプの通し番号順に適用するため、セルごとに全スタンプを順に塗った場合と結果は同一です。
+   * 塗りは常にスタンプ円の和集合の内側に限定されます。
+   *
+   * @param {CanvasRenderingContext2D} ctx 描画先2Dコンテキスト (`mosaicCtx`)
+   * @param {Map<number, object>} paintedCells `state.brushPaintedCells`
+   */
+  function commitBrushPaintedCells(ctx, paintedCells) {
+    const cellsByStamp = new Map();
+    for (const cell of paintedCells.values()) {
+      if (cell.full) {
+        fillMosaicCellOnContext(ctx, cell.cellX, cell.cellY, cell.cellW, cell.cellH, cell.colorInfo);
+        continue;
+      }
+      if (!cell.stamps) {
+        continue;
+      }
+      for (const stamp of cell.stamps) {
+        let list = cellsByStamp.get(stamp);
+        if (!list) {
+          list = [];
+          cellsByStamp.set(stamp, list);
+        }
+        list.push(cell);
+      }
+    }
+    const stamps = Array.from(cellsByStamp.keys()).sort((a, b) => a.seq - b.seq);
+    for (const stamp of stamps) {
+      fillMosaicCellsClippedToStamp(ctx, cellsByStamp.get(stamp), stamp);
     }
   }
 
@@ -3151,7 +3284,8 @@
       return;
     }
 
-    // 2b. ブラシストローク終了 → 塗ったセル群を mosaicCtx へ平均色で fillRect して再合成し、履歴に追加
+    // 2b. ブラシストローク終了 → 塗ったセル群を、保持したスタンプ円でのクリップ塗り（または全面塗り）として
+    //     mosaicCtx へ再実行して再合成し、履歴に追加
     if (state.isBrushing) {
       state.isBrushing = false;
       const paintedCells = state.brushPaintedCells;
@@ -3160,9 +3294,7 @@
 
       if (state.brushTouchedAny && paintedCells && paintedCells.size > 0) {
         state.brushTouchedAny = false;
-        for (const cell of paintedCells.values()) {
-          fillMosaicCellOnContext(mosaicCtx, cell.cellX, cell.cellY, cell.cellW, cell.cellH, cell.colorInfo);
-        }
+        commitBrushPaintedCells(mosaicCtx, paintedCells);
         compositeWorkCanvas();
         previewCtx.clearRect(0, 0, state.imageWidth, state.imageHeight);
         previewCtx.drawImage(workCanvas, 0, 0);
