@@ -894,6 +894,11 @@ body.shortcuts-visible .kbd-hint {
   flex-shrink: 0;
 }
 
+/* 縦画面用の改行専用要素 (デスクトップでは非表示) */
+.toolbar-break {
+  display: none;
+}
+
 /* ツールバー内の「元に戻す」「やり直す」「ショートカット」「閉じる」ボタン */
 #undoToolbarBtn,
 #redoToolbarBtn,
@@ -1712,6 +1717,36 @@ body.shortcuts-visible .shortcut-bar {
     min-height: 36px;
     padding: 4px 8px;
     gap: 4px 6px;
+  }
+
+  /* 上部ツールバーの行構成を固定 (1行目 = ステータス＋ズーム、2行目 = 元に戻す以降の操作ボタン群) */
+  .toolbar-break {
+    display: block;
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  /* 1行目の幅変動を吸収: ステータス文言・バッジの変化がツールバー全体に影響しないようにする */
+  .status-left {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* ズーム倍率表示を固定幅化 (最長形「800% ・ -180°」でも幅が変わらない) */
+  #zoomLevelText {
+    min-width: 13ch;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  /* 操作ボタンは縮んだり押し出されたりしないようサイズを固定 */
+  #undoToolbarBtn,
+  #redoToolbarBtn,
+  #saveAsBtn,
+  #shortcutHelpBtn,
+  #closeEditorBtn {
+    flex-shrink: 0;
   }
 
   .empty-state-box {
